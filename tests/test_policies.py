@@ -97,4 +97,3 @@ def test_history_buffer_respects_limit() -> None:
     assert "alice: one" not in drained
     assert "bob: two" in drained
     assert "carol: three" in drained
-

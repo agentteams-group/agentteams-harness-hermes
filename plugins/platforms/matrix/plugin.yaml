@@ -38,4 +38,3 @@ optional_env:
     description: "Display name for the Matrix home room"
     prompt: "Home room display name"
     password: false
-

@@ -69,4 +69,3 @@ def main() -> None:
             pass
 
     typer.run(_run)
-

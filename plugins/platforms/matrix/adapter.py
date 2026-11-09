@@ -21,4 +21,3 @@ def register(ctx) -> None:
 
     native.MatrixAdapter = MatrixAdapter
     native.register(ctx)
-

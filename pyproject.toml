@@ -34,4 +34,3 @@ hermes-worker = "hermes_worker.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["hermes_worker*", "hermes_matrix*"]
-

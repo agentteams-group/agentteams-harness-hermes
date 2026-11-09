@@ -115,4 +115,3 @@ def test_nonvision_image_downgrade_resolves_context_once(monkeypatch):
     assert "[User sent an image" in resolved_body
     assert adapter.build_content["msgtype"] == "m.text"
     assert len(adapter.handled) == 1
-

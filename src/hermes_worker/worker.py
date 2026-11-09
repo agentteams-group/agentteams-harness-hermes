@@ -467,4 +467,3 @@ class Worker:
                 os.environ[key] = val
         except OSError as exc:
             logger.warning("Could not source %s: %s", env_path, exc)
-

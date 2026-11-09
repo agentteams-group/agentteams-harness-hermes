@@ -237,4 +237,3 @@ WORKDIR /root/agentteams-fs/agents
 # default that points at a non-existent path.
 
 ENTRYPOINT ["/opt/agentteams/scripts/hermes-worker-entrypoint.sh"]
-

@@ -220,4 +220,3 @@ class HistoryBuffer:
 
     def clear(self, room_id: str) -> None:
         self._entries.pop(room_id, None)
-

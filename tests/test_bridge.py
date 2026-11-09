@@ -122,4 +122,3 @@ def test_bridge_enables_agentteams_matrix_plugin() -> None:
 
     assert config["plugins"]["enabled"] == ["other-plugin", "platforms/matrix"]
     assert config["plugins"]["disabled"] == ["legacy-plugin"]
-

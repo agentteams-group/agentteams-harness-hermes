@@ -13,4 +13,3 @@ The subclass adds only policy behavior:
   * copaw-style history buffering in group rooms
   * image downgrade when the active model lacks vision support
 """
-

@@ -37,4 +37,3 @@ class WorkerConfig:
     def hermes_home(self) -> Path:
         """``HERMES_HOME`` for this worker (config.yaml, .env, skills/, sessions/)."""
         return self.workspace_dir / ".hermes"
-

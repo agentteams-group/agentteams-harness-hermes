@@ -170,4 +170,3 @@ CMD_ARGS=(
 _start_readiness_reporter
 
 exec "${VENV}/bin/hermes-worker" "${CMD_ARGS[@]}"
-

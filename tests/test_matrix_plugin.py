@@ -62,4 +62,3 @@ def test_matrix_plugin_package_exports_register(monkeypatch):
     monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)
     assert callable(module.register)
-

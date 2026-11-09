@@ -146,4 +146,3 @@ def test_push_local_preserves_matrix_crypto_database_with_uncheckpointed_wal(tmp
             assert restored.execute("SELECT id FROM sessions").fetchone() == ("persisted-session",)
     finally:
         connection.close()
-

@@ -729,4 +729,3 @@ async def push_loop(sync: FileSync, check_interval: int = 5) -> None:
             break
         except Exception as exc:
             logger.warning("FileSync push error: %s", exc)
-

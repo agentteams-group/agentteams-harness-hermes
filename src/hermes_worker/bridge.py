@@ -558,4 +558,3 @@ def bridge_openclaw_to_hermes(
         existing_yaml.get("model", {}).get("default", ""),
         bool(matrix_block),
     )
-

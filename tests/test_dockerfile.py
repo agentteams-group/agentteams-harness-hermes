@@ -103,4 +103,3 @@ def test_hermes_image_runs_the_pinned_tag_python() -> None:
     assert "python3.14/site-packages" in text, (
         "the src overlay must target the 3.14 site-packages"
     )
-

@@ -273,4 +273,3 @@ class MatrixAdapter(_NativeMatrixAdapter):
             msgtype,
             mention_claimed=mention_claimed,
         )
-
