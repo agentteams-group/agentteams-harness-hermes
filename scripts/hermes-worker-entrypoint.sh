@@ -23,7 +23,8 @@ WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 # == ${HOME}/.hermes/. This makes `cd ~ && ls` show openclaw.json / AGENTS.md /
 # SOUL.md / skills / .hermes just like the openclaw worker.
 INSTALL_DIR="/root/agentteams-fs/agents"
-WORKSPACE="${INSTALL_DIR}/${WORKER_NAME}"
+WORKSPACE="${AGENTTEAMS_WORKER_HOME:-${INSTALL_DIR}/${WORKER_NAME}}"
+export HOME="${WORKSPACE}"
 
 log() {
     echo "[agentteams-hermes-worker $(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -64,30 +65,7 @@ mkdir -p "${WORKSPACE}/skills" "${HOME}/.agents"
 # instead of nesting ~/.agents/skills/skills inside it.
 ln -sfn "${WORKSPACE}/skills" "${HOME}/.agents/skills"
 
-# Background readiness reporter — report ready once the bridge has produced
-# the gateway's config.yaml (i.e. the worker can actually serve traffic).
-_start_readiness_reporter() {
-    [ -z "${AGENTTEAMS_CONTROLLER_URL:-}" ] && return 0
-
-    (
-        TIMEOUT=120; ELAPSED=0
-        CONFIG_FILE="${WORKSPACE}/.hermes/config.yaml"
-        while [ "${ELAPSED}" -lt "${TIMEOUT}" ]; do
-            if [ -f "${CONFIG_FILE}" ] && grep -q '^matrix:' "${CONFIG_FILE}" 2>/dev/null; then
-                break
-            fi
-            sleep 5; ELAPSED=$((ELAPSED + 5))
-        done
-
-        if [ "${ELAPSED}" -ge "${TIMEOUT}" ]; then
-            log "WARNING: readiness reporter timed out waiting for config after ${TIMEOUT}s"
-            exit 1
-        fi
-
-        agt worker report-ready
-    ) &
-    log "Background readiness reporter started (PID: $!)"
-}
+# Your Matrix adapter reports readiness after the transport connects.
 
 VENV="/opt/venv/hermes"
 log "Starting hermes-worker: ${WORKER_NAME}"
@@ -166,7 +144,5 @@ CMD_ARGS=(
     --fs-bucket "${FS_BUCKET}"
     --install-dir "${INSTALL_DIR}"
 )
-
-_start_readiness_reporter
 
 exec "${VENV}/bin/hermes-worker" "${CMD_ARGS[@]}"

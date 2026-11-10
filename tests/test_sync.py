@@ -3,10 +3,28 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 
 from hermes_worker import sync as sync_module
 from hermes_worker.sync import FileSync, push_local
+
+
+def test_manager_role_projection_does_not_overwrite_personality(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "manager")
+    sync = FileSync(endpoint="http://minio:9000", access_key="test", secret_key="test",
+                    bucket="test", worker_name="manager", local_dir=tmp_path)
+    (tmp_path / ".hermes").mkdir()
+    (tmp_path / "SOUL.md").write_text("Your personality.")
+    os.utime(tmp_path / "SOUL.md", (1, 1))
+    (tmp_path / ".hermes/SOUL.md").write_text(
+        "<!-- agentteams-manager-role-start -->\nYou are the Manager.\n"
+        "<!-- agentteams-manager-role-end -->\n\nYour updated personality.")
+    monkeypatch.setattr(sync, "_ensure_alias", lambda: None)
+    monkeypatch.setattr(sync, "_cat", lambda key: "")
+    monkeypatch.setattr(sync_module, "_mc", lambda *args, **kwargs: None)
+    sync_module.push_local(sync)
+    assert (tmp_path / "SOUL.md").read_text() == "Your updated personality."
 
 
 def test_mirror_all_falls_back_to_startup_files_when_prefix_missing(

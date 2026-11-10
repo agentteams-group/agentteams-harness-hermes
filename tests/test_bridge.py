@@ -59,6 +59,33 @@ def _bridge_and_read(openclaw_cfg: dict, initial_config: dict | None = None) -> 
         return yaml.safe_load((hermes_home / "config.yaml").read_text())
 
 
+def test_manager_role_is_bound_to_native_system_prompt(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "manager")
+    bridge_openclaw_to_hermes(_make_openclaw_cfg(vision=False), tmp_path,
+                             soul="Your administrator prefers concise answers.",
+                             agents_md="You are the TeamHarness Manager. Delegate team work to the Leader.")
+    soul = (tmp_path / "SOUL.md").read_text()
+    assert "You are the TeamHarness Manager." in soul
+    assert "Your administrator prefers concise answers." in soul
+    bridge_openclaw_to_hermes(_make_openclaw_cfg(vision=False), tmp_path, soul=soul,
+                             agents_md="You are the TeamHarness Manager. Delegate team work to the Leader.")
+    assert (tmp_path / "SOUL.md").read_text() == soul
+
+
+def test_native_transport_receives_group_members_without_expanding_dm_access(tmp_path, monkeypatch):
+    from hermes_matrix.policies import DualAllowList
+    config = _make_openclaw_cfg(vision=False)
+    config["channels"]["matrix"]["dm"] = {"allowFrom": ["@admin:matrix.local"]}
+    config["channels"]["matrix"]["groupAllowFrom"] = ["@leader:matrix.local"]
+    bridge_openclaw_to_hermes(config, tmp_path)
+    for key, value in bridge_module._read_env_file(tmp_path / ".env").items():
+        monkeypatch.setenv(key, value)
+    policy = DualAllowList.from_env()
+    assert policy.permits("@leader:matrix.local", is_dm=False)
+    assert not policy.permits("@leader:matrix.local", is_dm=True)
+    assert "@leader:matrix.local" in bridge_module._read_env_file(tmp_path / ".env")["MATRIX_ALLOWED_USERS"]
+
+
 def test_bridge_writes_auxiliary_vision_config(monkeypatch) -> None:
     monkeypatch.setattr(bridge_module, "_is_in_container", lambda: False)
 

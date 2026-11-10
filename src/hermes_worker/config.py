@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 
 class WorkerConfig:
@@ -31,6 +32,8 @@ class WorkerConfig:
     @property
     def workspace_dir(self) -> Path:
         """Per-worker workspace root (mirror of MinIO ``agents/<name>/``)."""
+        if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
+            return Path(os.environ["AGENTTEAMS_WORKER_HOME"])
         return self.install_dir / self.worker_name
 
     @property

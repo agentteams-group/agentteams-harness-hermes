@@ -221,6 +221,9 @@ def _matrix_env(cfg: Dict[str, Any]) -> Dict[str, str]:
     if not matrix_raw:
         return {}
     in_container = _is_in_container()
+    dm_allow = _csv(matrix_raw.get("dm", {}).get("allowFrom"))
+    group_allow = _csv(matrix_raw.get("groupAllowFrom"))
+    transport_allow = sorted({value for value in (dm_allow + "," + group_allow).split(",") if value})
 
     env: Dict[str, str] = {
         "MATRIX_HOMESERVER": _port_remap(
@@ -231,7 +234,8 @@ def _matrix_env(cfg: Dict[str, Any]) -> Dict[str, str]:
         "MATRIX_DEVICE_ID": matrix_raw.get("deviceId", ""),
         "MATRIX_ENCRYPTION": "true" if matrix_raw.get("encryption") else "false",
         "MATRIX_DM_POLICY": matrix_raw.get("dm", {}).get("policy", "allowlist"),
-        "MATRIX_ALLOWED_USERS": _csv(matrix_raw.get("dm", {}).get("allowFrom")),
+        "MATRIX_ALLOWED_USERS": _csv(transport_allow),
+        "MATRIX_DM_ALLOW_FROM": dm_allow,
         "MATRIX_GROUP_POLICY": matrix_raw.get("groupPolicy", "allowlist"),
         "MATRIX_GROUP_ALLOW_FROM": _csv(matrix_raw.get("groupAllowFrom")),
         # Hermes's own bridge in gateway/config.py reads these; keep the names.
@@ -545,6 +549,14 @@ def bridge_openclaw_to_hermes(
     # root of HERMES_HOME. We mirror copaw's flow so manager-side workflows
     # are identical across worker types.
     if soul is not None:
+        if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager" and agents_md:
+            # SOUL is Hermes' native system prompt input. Bind the role there
+            # as well so existing sessions cannot rely on legacy instructions.
+            start = "<!-- agentteams-manager-role-start -->"
+            end = "<!-- agentteams-manager-role-end -->"
+            if soul.startswith(start) and end in soul:
+                soul = soul.partition(end)[2].lstrip("\n")
+            soul = f"{start}\n{agents_md}\n{end}\n\n{soul}"
         (hermes_home / "SOUL.md").write_text(soul)
     if agents_md is not None:
         (hermes_home / "AGENTS.md").write_text(agents_md)

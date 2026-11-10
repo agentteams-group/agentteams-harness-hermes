@@ -142,7 +142,7 @@ class DualAllowList:
             ),
             dm_allow=frozenset(
                 normalize_user_id(value)
-                for value in _csv_set(os.getenv("MATRIX_ALLOWED_USERS"))
+                for value in _csv_set(os.getenv("MATRIX_DM_ALLOW_FROM", os.getenv("MATRIX_ALLOWED_USERS")))
             ),
             group_allow=frozenset(
                 normalize_user_id(value)
