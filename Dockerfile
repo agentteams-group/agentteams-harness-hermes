@@ -236,4 +236,10 @@ WORKDIR /root/agentteams-fs/agents
 # deliberately leave it unset in the image so `docker exec` can't see a wrong
 # default that points at a non-existent path.
 
+COPY --from=agentteams-controller \
+    /opt/agentteams/agent/skills/worker-management/scripts/install-worker-skill.sh \
+    /opt/agentteams/agent/skills/worker-management/scripts/safe-extract-worker-skill.py \
+    /opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh \
+    /opt/agentteams/agent/skills/worker-management/scripts/
+
 ENTRYPOINT ["/opt/agentteams/scripts/hermes-worker-entrypoint.sh"]

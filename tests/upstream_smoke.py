@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, patch
 
 
 def main() -> None:
+    for helper in ("install-worker-skill.sh", "safe-extract-worker-skill.py", "push-worker-skills.sh"):
+        assert Path("/opt/agentteams/agent/skills/worker-management/scripts", helper).is_file(), helper
     tag = subprocess.check_output(
         ["git", "-C", "/opt/hermes-src", "describe", "--tags", "--exact-match", "HEAD"],
         text=True,
