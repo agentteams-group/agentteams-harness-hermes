@@ -5,8 +5,8 @@ Bootstrap flow (mirrors copaw_worker.worker.Worker):
   1. Ensure ``mc`` (MinIO Client) is on PATH (auto-download on first run).
   2. Mirror the worker's MinIO prefix to local disk so we have openclaw.json,
      SOUL.md, AGENTS.md, skills/, etc. available.
-  3. Re-login to Matrix (writes a fresh access_token + device_id back into
-     openclaw.json) so E2EE keeps working across restarts.
+  3. Refresh Matrix access while retaining the persisted device identity,
+     so E2EE keeps working across restarts.
   4. Bridge openclaw.json → ``${HERMES_HOME}/{config.yaml,.env,SOUL.md,AGENTS.md}``.
   5. Mirror skill directories from MinIO into ``${HERMES_HOME}/skills/``.
   6. Start background pull/push loops against MinIO.
@@ -22,7 +22,9 @@ import logging
 import os
 import platform
 import shutil
+import sqlite3
 import stat
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -125,7 +127,7 @@ class Worker:
                 )
                 await asyncio.sleep(5)
 
-        # Refresh Matrix credentials (E2EE relies on a fresh device_id).
+        # Refresh Matrix credentials while retaining the device owning the room keys.
         openclaw_cfg = self._matrix_relogin(openclaw_cfg)
 
         # When we run on the host (dev) and the FS endpoint includes a port,
@@ -206,8 +208,8 @@ class Worker:
 
         The Manager publishes ``credentials/matrix/password`` for each worker
         and rotates it as needed.  Logging in from scratch issues a *new*
-        ``device_id`` and access token, which keeps the per-restart Olm
-        identity rotation invisible to other clients (Element Web).
+        access token. Reuse the saved device ID so the persisted Olm account
+        and room keys remain valid across restarts and image upgrades.
         """
         import json
         import urllib.error
@@ -234,11 +236,28 @@ class Worker:
             return openclaw_cfg
 
         login_url = f"{homeserver}/_matrix/client/v3/login"
-        body = json.dumps({
+        login = {
             "type": "m.login.password",
             "identifier": {"type": "m.id.user", "user": self.worker_name},
             "password": matrix_password,
-        }).encode()
+        }
+        device_id = matrix_cfg.get("deviceId", "")
+        # MinIO's Manager-owned openclaw.json may still name the registration
+        # device. The restored crypto account owns the identity actually used.
+        for relative in ("platforms/matrix/store/crypto.db", "matrix/store/crypto.db"):
+            crypto_db = self._hermes_home / relative
+            if crypto_db.exists():
+                with closing(sqlite3.connect(crypto_db.as_uri() + "?mode=ro", uri=True)) as connection:
+                    account = connection.execute(
+                        "SELECT device_id FROM crypto_account WHERE account_id = ?",
+                        (matrix_cfg.get("userId", ""),),
+                    ).fetchone()
+                if account and account[0]:
+                    device_id = account[0]
+                    break
+        if device_id:
+            login["device_id"] = device_id
+        body = json.dumps(login).encode()
 
         try:
             req = urllib.request.Request(

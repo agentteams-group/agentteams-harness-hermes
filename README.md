@@ -63,3 +63,27 @@ Worker startup continues to use `AGENTTEAMS_WORKER_NAME`, `AGENTTEAMS_FS_*`
 and `AGENTTEAMS_RUNTIME`; see `scripts/hermes-worker-entrypoint.sh` for the
 environment contract. Configurations, sessions, user plugins and Matrix crypto
 state remain in the existing per-worker workspace across an image upgrade.
+
+## Upgrading an existing Worker
+
+Wait for active turns to finish and the final workspace sync to complete before
+replacing the Worker image. Reuse the existing worker name and MinIO/OSS prefix.
+Startup restores the workspace, reads the Matrix device ID from the persisted
+crypto account (the Manager's config may contain an older registration device),
+and refreshes the token for that same device. No Matrix account or room needs
+to be recreated.
+
+This is a restart-based upgrade with a brief interruption. Interrupting an active
+turn can leave the native Hermes conversation paused for explicit recovery;
+receiving its reply alone does not mean the turn has finished committing.
+
+CI runs `tests/upgrade_e2e.py` against the released v1.2.6 image (Hermes v0.22.7).
+It creates plain and encrypted Matrix conversations, restores into a fresh
+v0.23.0 container solely from MinIO, continues both sessions, restarts again,
+and decrypts a pre-upgrade encrypted event with the restored Megolm keys.
+Matrix, MinIO and both Hermes runtimes are real; the model endpoint is a
+deterministic fixture so loss of history causes an exact assertion failure.
+
+```sh
+python3 tests/upgrade_e2e.py --new-image ghcr.io/agentteams-group/agentteams-harness-hermes:v0.1.0
+```
