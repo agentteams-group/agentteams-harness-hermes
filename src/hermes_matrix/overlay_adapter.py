@@ -15,6 +15,7 @@ typing, reactions, threads, E2EE, read receipts) stay in the upstream adapter.
 from __future__ import annotations
 
 import logging
+import asyncio
 import os
 import types
 from typing import Any, Dict, Optional
@@ -105,7 +106,19 @@ class MatrixAdapter(_NativeMatrixAdapter):
         ok = await super().connect(is_reconnect=is_reconnect)
         if ok and self._client is not None:
             self._wrap_send_message_event()
+            if os.getenv("AGENTTEAMS_CONTROLLER_URL"):
+                reporter = await asyncio.create_subprocess_exec(
+                    "agt", "worker", "report-ready", "--name",
+                    os.getenv("AGENTTEAMS_WORKER_CR_NAME") or os.environ["AGENTTEAMS_WORKER_NAME"],
+                )
+                if await reporter.wait() != 0:
+                    logger.warning("Controller readiness report failed after Matrix connected")
         return ok
+
+    def _is_sender_authorized(self, user_id: str, *args, **kwargs):
+        if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
+            return user_id in DualAllowList.from_env().group_combined_allow
+        return super()._is_sender_authorized(user_id, *args, **kwargs)
 
     def _wrap_send_message_event(self) -> None:
         """Inject MSC3952 ``m.mentions`` into every outgoing Matrix event."""
@@ -144,6 +157,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
         voice_gate: Any = None,
     ) -> Optional[tuple]:
         """Apply AgentTeams allow/history policy around native mention gating."""
+        if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
+            self._dual_allow = DualAllowList.from_env()
         is_dm = await self._is_dm_room(room_id)
         if not self._dual_allow.permits(sender, is_dm=is_dm):
             return None

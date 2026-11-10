@@ -629,6 +629,11 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
         outer_mtime = outer.stat().st_mtime if outer.exists() else 0
         if inner_mtime > outer_mtime:
             inner_content = inner.read_text(errors="replace")
+            if name == "SOUL.md" and os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
+                start = "<!-- agentteams-manager-role-start -->"
+                end = "<!-- agentteams-manager-role-end -->"
+                if inner_content.startswith(start) and end in inner_content:
+                    inner_content = inner_content.partition(end)[2].lstrip("\n")
             outer_content = outer.read_text(errors="replace") if outer.exists() else ""
             if inner_content != outer_content:
                 outer.write_text(inner_content)

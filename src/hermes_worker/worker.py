@@ -164,7 +164,7 @@ class Worker:
         asyncio.create_task(
             sync_loop(
                 self.sync,
-                interval=self.config.sync_interval,
+                interval=5 if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager" else self.config.sync_interval,
                 on_pull=self._on_files_pulled,
             )
         )
