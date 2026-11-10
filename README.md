@@ -68,6 +68,8 @@ state remain in the existing per-worker workspace across an image upgrade.
 
 Wait for active turns to finish and the final workspace sync to complete before
 replacing the Worker image. Reuse the existing worker name and MinIO/OSS prefix.
+Preserve any container-local changes that have not reached object storage before
+replacement; a fresh container can only restore persisted state.
 Startup restores the workspace, reads the Matrix device ID from the persisted
 crypto account (the Manager's config may contain an older registration device),
 and refreshes the token for that same device. No Matrix account or room needs

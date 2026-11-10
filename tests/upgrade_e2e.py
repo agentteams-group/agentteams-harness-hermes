@@ -316,7 +316,7 @@ def run(args):
         for name in reversed(created):
             logs = subprocess.run(["docker", "logs", name], capture_output=True, text=True)
             (evidence / (name + ".log")).write_text(logs.stdout + logs.stderr)
-            subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+            subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True)
         subprocess.run(["docker", "network", "rm", network], capture_output=True)
 
 
