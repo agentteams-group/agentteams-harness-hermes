@@ -1,6 +1,7 @@
 """Run inside the pinned Hermes image: real queue, waiter, decisions and receipts."""
 import asyncio
 import json
+import os
 import subprocess
 import unittest
 from types import SimpleNamespace
@@ -47,7 +48,8 @@ class NativeApprovalSmoke(unittest.IsolatedAsyncioTestCase):
                 await transport.answer("!room", "@intruder", body)
                 await transport.answer("!room", "@owner", body.replace(data["context_id"], "stale"))
                 self.assertFalse(wait.done())
-                await transport.answer("!room", "@owner", "@worker " + body)
+                with patch.dict(os.environ, {"AGENTTEAMS_ADMIN_USER": "admin", "AGENTTEAMS_MATRIX_DOMAIN": "matrix"}):
+                    await transport.answer("!room", "@admin:matrix" if action == "approve" else "@owner", "@worker " + body)
                 result = await asyncio.wait_for(wait, 10)
                 self.assertEqual(result["choice"], expected)
                 proof = subprocess.check_output(["sh", "-c", "printf native-proof"], text=True) if result["choice"] == "once" else ""

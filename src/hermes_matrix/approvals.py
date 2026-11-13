@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 import time
 
@@ -67,7 +68,10 @@ class MatrixApprovals:
             return True  # Stale controls must never become model instructions.
         prompt = entry["prompt"]
         requester = (prompt.metadata or {}).get("requester_user_id")
-        if requester and requester != sender:
+        admin_name = os.getenv("AGENTTEAMS_ADMIN_USER", "")
+        domain = os.getenv("AGENTTEAMS_MATRIX_DOMAIN", "")
+        admin = admin_name if admin_name.startswith("@") else f"@{admin_name}:{domain}" if admin_name and domain else None
+        if requester and sender not in {requester, admin}:
             return True
         from tools.approval import resolve_gateway_approval_card
         entry["decision"] = "approved" if action == "approve" else "rejected"
