@@ -145,4 +145,6 @@ CMD_ARGS=(
     --install-dir "${INSTALL_DIR}"
 )
 
+export PYTHONPATH="/opt/agentteams/scripts/lib${PYTHONPATH:+:${PYTHONPATH}}"
+python3 /opt/agentteams/scripts/lib/agentteams_receipts.py serve --runtime hermes --workspace "${WORKSPACE}" &
 exec "${VENV}/bin/hermes-worker" "${CMD_ARGS[@]}"
