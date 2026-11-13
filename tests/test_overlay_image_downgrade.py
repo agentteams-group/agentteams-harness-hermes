@@ -95,6 +95,7 @@ def test_nonvision_image_downgrade_resolves_context_once(monkeypatch):
             return True
 
     adapter._dual_allow = Allow()
+    adapter._dashboard_approvals = module.MatrixApprovals(adapter._send_dashboard_approval)
     adapter._history = HistoryBuffer(limit=10)
     adapter._history.record("!room", "bob", "prior group context")
     adapter._vision_enabled = False

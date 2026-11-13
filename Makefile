@@ -19,3 +19,4 @@ test:
 
 smoke:
 	docker run --rm --entrypoint /opt/venv/hermes/bin/python -v "$(CURDIR)/tests/upstream_smoke.py:/tmp/upstream_smoke.py:ro" $(IMAGE):$(VERSION) /tmp/upstream_smoke.py
+	docker run --rm --entrypoint /opt/venv/hermes/bin/python -v "$(CURDIR)/tests/native_approvals_smoke.py:/tmp/native_approvals_smoke.py:ro" $(IMAGE):$(VERSION) /tmp/native_approvals_smoke.py
