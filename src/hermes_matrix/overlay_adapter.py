@@ -31,6 +31,10 @@ from hermes_matrix.policies import (
 )
 
 logger = logging.getLogger(__name__)
+try:
+    from agentteams_receipts import Receipts, capture_audience, credentials, matrix_request
+except ModuleNotFoundError:
+    Receipts = None  # Standalone older installations do not advertise support.
 _IMAGE_FILENAME_EXTENSIONS = frozenset({
     ".png",
     ".jpg",
@@ -96,11 +100,14 @@ def _describe_dropped_media(source_content: dict, fallback_body: str) -> str:
 class MatrixAdapter(_NativeMatrixAdapter):
     """Thin subclass that overlays AgentTeams policy on hermes native Matrix."""
 
+    _session_receipts = None
+
     def __init__(self, config: PlatformConfig):
         super().__init__(config)
         self._dual_allow = DualAllowList.from_env()
         self._history = HistoryBuffer.from_env()
         self._vision_enabled = _truthy_env("MATRIX_VISION_ENABLED", default=False)
+        self._session_receipts = Receipts(os.getenv("AGENTTEAMS_WORKER_HOME") or os.environ["HOME"]) if Receipts else None
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         ok = await super().connect(is_reconnect=is_reconnect)
@@ -139,6 +146,9 @@ class MatrixAdapter(_NativeMatrixAdapter):
         ) -> Any:
             if isinstance(content, dict):
                 apply_outbound_mentions(content, self_user_id=self._user_id)
+                if self._session_receipts and str(event_type) == "m.room.message":
+                    request = lambda *args: matrix_request(*credentials(self._session_receipts.workspace))(*args)
+                    content = await asyncio.to_thread(capture_audience, request, str(room_id), content)
             return await original(room_id, event_type, content, *args, **kwargs)
 
         self._client.send_message_event = types.MethodType(wrapped, self._client)
@@ -177,7 +187,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
             if not is_dm:
                 display = await self._get_display_name(room_id, sender)
                 history_body = _describe_dropped_media(source_content, body)
-                self._history.record(room_id, display, history_body)
+                self._history.record(room_id, display, history_body, event_id)
             return None
 
         body, is_dm, chat_type, thread_id, display_name, source = ctx
@@ -191,9 +201,12 @@ class MatrixAdapter(_NativeMatrixAdapter):
             return body, is_dm, chat_type, thread_id, display_name, source
 
         body = f"{display_name}: {body}"
+        history_ids = self._history.event_ids(room_id)
         history_prefix = self._history.drain(room_id)
         if history_prefix:
             body = history_prefix + body
+            if self._session_receipts:
+                await asyncio.to_thread(self._session_receipts.link, room_id, event_id, history_ids)
         return body, is_dm, chat_type, thread_id, display_name, source
 
     async def _handle_media_message(

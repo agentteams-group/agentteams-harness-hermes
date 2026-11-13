@@ -177,6 +177,7 @@ class DualAllowList:
 class _HistoryEntry:
     sender: str
     body: str
+    event_id: str = ""
 
 
 @dataclass
@@ -195,16 +196,19 @@ class HistoryBuffer:
             limit = DEFAULT_HISTORY_LIMIT
         return cls(limit=max(limit, 0))
 
-    def record(self, room_id: str, sender: str, body: str) -> None:
+    def record(self, room_id: str, sender: str, body: str, event_id: str = "") -> None:
         if self.limit <= 0 or not room_id:
             return
         text = (body or "").strip()
         if not text:
             return
         bucket = self._entries.setdefault(room_id, [])
-        bucket.append(_HistoryEntry(sender=sender or "unknown", body=text))
+        bucket.append(_HistoryEntry(sender=sender or "unknown", body=text, event_id=event_id))
         while len(bucket) > self.limit:
             bucket.pop(0)
+
+    def event_ids(self, room_id: str) -> list[str]:
+        return [entry.event_id for entry in self._entries.get(room_id, []) if entry.event_id]
 
     def drain(self, room_id: str) -> str:
         entries = self._entries.pop(room_id, None)

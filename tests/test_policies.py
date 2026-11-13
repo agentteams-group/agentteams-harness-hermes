@@ -88,9 +88,10 @@ def test_history_buffer_drain_formats_prefix_and_clears() -> None:
 
 def test_history_buffer_respects_limit() -> None:
     history = HistoryBuffer(limit=2)
-    history.record("!room:matrix.local", "alice", "one")
-    history.record("!room:matrix.local", "bob", "two")
-    history.record("!room:matrix.local", "carol", "three")
+    history.record("!room:matrix.local", "alice", "one", "$dropped")
+    history.record("!room:matrix.local", "bob", "two", "$retained-one")
+    history.record("!room:matrix.local", "carol", "three", "$retained-two")
+    assert history.event_ids("!room:matrix.local") == ["$retained-one", "$retained-two"]
 
     drained = history.drain("!room:matrix.local")
 
