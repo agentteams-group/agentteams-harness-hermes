@@ -20,3 +20,6 @@ test:
 smoke:
 	docker run --rm --entrypoint /opt/venv/hermes/bin/python -v "$(CURDIR)/tests/upstream_smoke.py:/tmp/upstream_smoke.py:ro" $(IMAGE):$(VERSION) /tmp/upstream_smoke.py
 	docker run --rm --entrypoint /opt/venv/hermes/bin/python -v "$(CURDIR)/tests/native_approvals_smoke.py:/tmp/native_approvals_smoke.py:ro" $(IMAGE):$(VERSION) /tmp/native_approvals_smoke.py
+
+direct-control-smoke:
+	docker run --rm --entrypoint /bin/sh -v "$(CURDIR):/dm:ro" -e PYTHONPATH=/dm/src $(IMAGE):$(VERSION) -ec '/opt/venv/hermes/bin/python -m pip install pytest pytest-asyncio; /opt/venv/hermes/bin/python -m pytest /dm/tests/test_direct_control.py -q'

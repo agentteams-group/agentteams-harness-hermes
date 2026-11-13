@@ -42,7 +42,7 @@ def _load_overlay_with_fake_gateway(monkeypatch):
         ):
             self.build_ctx = ctx
             self.build_content = source_content
-            return types.SimpleNamespace(message_type="text")
+            return types.SimpleNamespace(message_type="text", raw_message=None)
 
         async def _handle_text_message(self, *args, **kwargs):
             self.text_calls += 1
