@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional
 from gateway.config import PlatformConfig
 from gateway.platforms.event import MessageType
 from plugins.platforms.matrix.adapter import MatrixAdapter as _NativeMatrixAdapter
+from hermes_matrix.approvals import MatrixApprovals, KEY as APPROVAL_KEY
 
 from hermes_matrix.policies import (
     DualAllowList,
@@ -102,6 +103,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
         self._history = HistoryBuffer.from_env()
         self._vision_enabled = _truthy_env("MATRIX_VISION_ENABLED", default=False)
         self._direct_runs: dict[str, dict] = {}
+        self._dashboard_approvals = MatrixApprovals(self._send_dashboard_approval)
 
     async def _direct_member(self, event) -> bool:
         if not event.source or not event.message_id or not self._client:
@@ -182,6 +184,16 @@ class MatrixAdapter(_NativeMatrixAdapter):
             event._agentteams_inputs = inputs
             event.text = "Continue the original request using the supplementary information below. Preserve earlier results and conversation context.\n\n" + "\n\n".join(inputs)
             return await super().handle_message(event)
+    async def _send_dashboard_approval(self, room_id, text, approval):
+        from mautrix.types import EventType, RoomID
+        return await self._client.send_message_event(
+            RoomID(room_id), EventType.ROOM_MESSAGE,
+            {"msgtype": "m.text", "body": text, APPROVAL_KEY: approval},
+        )
+
+    async def _send_exec_approval_prompt(self, prompt):
+        result = await self._dashboard_approvals.prompt(prompt)
+        return result if result is not None else await super()._send_exec_approval_prompt(prompt)
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         ok = await super().connect(is_reconnect=is_reconnect)
@@ -248,6 +260,9 @@ class MatrixAdapter(_NativeMatrixAdapter):
             self._dual_allow = DualAllowList.from_env()
         is_dm = await self._is_dm_room(room_id)
         if not self._dual_allow.permits(sender, is_dm=is_dm):
+            return None
+
+        if await self._dashboard_approvals.answer(room_id, sender, body):
             return None
 
         ctx = await super()._resolve_message_context(
