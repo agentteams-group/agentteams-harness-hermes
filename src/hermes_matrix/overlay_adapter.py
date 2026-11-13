@@ -118,7 +118,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
             return False
 
     async def _execution_status(self, run, status):
-        await self._client.send_message_event(run["room"], "m.room.message", {
+        from mautrix.types import EventType, RoomID
+        await self._client.send_message_event(RoomID(run["room"]), EventType.ROOM_MESSAGE, {
             "msgtype": "m.notice", "body": {
                 "running": "正在执行", "stopping": "正在停止", "stopped": "已停止",
                 "completed": "本轮已结束", "failed": "执行失败",
@@ -237,7 +238,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
             if run and str(event_type) == "m.room.message":
                 serialized = content if isinstance(content, dict) else content.serialize()
                 if serialized.get("msgtype") == "m.text":
-                    run["message_id"] = str(result)
+                    relation = serialized.get("m.relates_to", {})
+                    run["message_id"] = relation.get("event_id") if relation.get("rel_type") == "m.replace" else str(result)
             return result
 
         self._client.send_message_event = types.MethodType(wrapped, self._client)

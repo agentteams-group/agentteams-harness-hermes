@@ -31,6 +31,37 @@ class NativeAgent(InterruptControlMixin):
         self.quiet_mode = True
 
 
+def test_execution_notice_uses_the_native_serializable_event_type(monkeypatch):
+    monkeypatch.setenv("MATRIX_ALLOWED_USERS", "@human:test")
+    async def check():
+        adapter = MatrixAdapter(PlatformConfig(enabled=True))
+        async def send(room, event_type, content):
+            # Native Megolm serialization calls this method; a plain string
+            # works in an unencrypted room but fails before encrypted delivery.
+            assert event_type.serialize() == "m.room.message"
+            assert content["com.agentteams.execution"]["status"] == "running"
+        adapter._client = SimpleNamespace(send_message_event=send)
+        await adapter._execution_status({"room": "!dm:test", "event": message("$start", "task")}, "running")
+    asyncio.run(check())
+
+
+def test_streaming_edit_marks_its_original_response(monkeypatch):
+    monkeypatch.setenv("MATRIX_ALLOWED_USERS", "@human:test")
+    async def check():
+        adapter = MatrixAdapter(PlatformConfig(enabled=True))
+        adapter._user_id = "@agent:test"
+        adapter._client = SimpleNamespace(send_message_event=AsyncMock(return_value="$edit"))
+        run = adapter._direct_runs["!dm:test"] = {"event": message("$start", "task")}
+        adapter._wrap_send_message_event()
+        from mautrix.types import EventType
+        await adapter._client.send_message_event("!dm:test", EventType.ROOM_MESSAGE, {
+            "msgtype": "m.text", "body": "partial",
+            "m.relates_to": {"rel_type": "m.replace", "event_id": "$root"},
+        })
+        assert run["message_id"] == "$root"
+    asyncio.run(check())
+
+
 @pytest.mark.parametrize("action", ["stop", "steer"])
 def test_native_shell_exits_before_stop_ack_and_supplement(monkeypatch, tmp_path, action):
     monkeypatch.setenv("MATRIX_ALLOWED_USERS", "@human:test")
