@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional
 from gateway.config import PlatformConfig
 from gateway.platforms.event import MessageType
 from plugins.platforms.matrix.adapter import MatrixAdapter as _NativeMatrixAdapter
+from hermes_matrix.approvals import MatrixApprovals, KEY as APPROVAL_KEY
 
 from hermes_matrix.policies import (
     DualAllowList,
@@ -108,6 +109,103 @@ class MatrixAdapter(_NativeMatrixAdapter):
         self._history = HistoryBuffer.from_env()
         self._vision_enabled = _truthy_env("MATRIX_VISION_ENABLED", default=False)
         self._session_receipts = Receipts(os.getenv("AGENTTEAMS_WORKER_HOME") or os.environ["HOME"]) if Receipts else None
+        self._direct_runs: dict[str, dict] = {}
+        self._dashboard_approvals = MatrixApprovals(self._send_dashboard_approval)
+
+    async def _direct_member(self, event) -> bool:
+        if not event.source or not event.message_id or not self._client:
+            return False
+        sender = event.source.user_id
+        if not self._dual_allow.permits(sender, is_dm=True):
+            return False
+        try:
+            members = await self._client.get_joined_members(event.source.chat_id)
+            return set(members) == {self._user_id, sender}
+        except Exception:
+            return False
+
+    async def _execution_status(self, run, status):
+        from mautrix.types import EventType, RoomID
+        await self._client.send_message_event(RoomID(run["room"]), EventType.ROOM_MESSAGE, {
+            "msgtype": "m.notice", "body": {
+                "running": "正在执行", "stopping": "正在停止", "stopped": "已停止",
+                "completed": "本轮已结束", "failed": "执行失败",
+            }[status],
+            "com.agentteams.execution": {
+                "run_id": run["event"].message_id, "status": status,
+                "capabilities": ["stop", "steer"],
+                **({"message_id": run["message_id"]} if run.get("message_id") else {}),
+            },
+        })
+
+    async def _process_message_background(self, event, session_key):
+        if not await self._direct_member(event):
+            return await super()._process_message_background(event, session_key)
+        room = event.source.chat_id
+        run = {"event": event, "room": room, "task": asyncio.current_task(),
+               "session_key": session_key, "stopped": False,
+               "inputs": getattr(event, "_agentteams_inputs", [event.text]),
+               "input_ids": getattr(event, "_agentteams_input_ids", [event.message_id])}
+        self._direct_runs[room] = run
+        await self._execution_status(run, "running")
+        status = "completed"
+        try:
+            return await super()._process_message_background(event, session_key)
+        except BaseException:
+            status = "failed"
+            raise
+        finally:
+            if self._direct_runs.get(room) is run:
+                self._direct_runs.pop(room)
+            await self._execution_status(run, "stopped" if run["stopped"] else status)
+
+    async def handle_message(self, event):
+        raw = event.raw_message
+        control = raw.get("com.agentteams.control") if isinstance(raw, dict) else None
+        if not isinstance(raw, dict) or "com.agentteams.control" not in raw:
+            return await super().handle_message(event)
+        if not isinstance(control, dict):
+            return
+        action = control.get("action")
+        if action not in {"stop", "steer"} or control.get("agent_id") != self._user_id:
+            return
+        run = self._direct_runs.get(event.source.chat_id)
+        if not run or run["event"].message_id != control.get("run_id"):
+            if action == "steer":
+                return await super().handle_message(event)
+            return
+        if event.source.user_id != run["event"].source.user_id or not await self._direct_member(event):
+            return
+        runner = getattr(self._message_handler, "__self__", None)
+        # The native runner owns a worker thread. Cancelling its asyncio waiter
+        # would leave shell/MCP work alive; request its hard interrupt instead.
+        from agent.interrupt_compat import request_hard_interrupt
+        while not run["task"].done():
+            agent = runner._running_agents.get(run["session_key"]) if runner else None
+            if agent is not None and request_hard_interrupt(agent):
+                run["stopped"] = True
+                await self._execution_status(run, "stopping")
+                break
+            await asyncio.sleep(0.05)
+        await asyncio.shield(run["task"])
+        if action == "steer":
+            inputs = [*run["inputs"], event.text]
+            event._agentteams_inputs = inputs
+            event._agentteams_input_ids = [*run.get("input_ids", [run["event"].message_id]), event.message_id]
+            event.text = "Continue the original request using the supplementary information below. Preserve earlier results and conversation context.\n\n" + "\n\n".join(inputs)
+            if self._session_receipts:
+                await asyncio.to_thread(self._session_receipts.link, event.source.chat_id, event.message_id, event._agentteams_input_ids)
+            return await super().handle_message(event)
+    async def _send_dashboard_approval(self, room_id, text, approval):
+        from mautrix.types import EventType, RoomID
+        return await self._client.send_message_event(
+            RoomID(room_id), EventType.ROOM_MESSAGE,
+            {"msgtype": "m.text", "body": text, APPROVAL_KEY: approval},
+        )
+
+    async def _send_exec_approval_prompt(self, prompt):
+        result = await self._dashboard_approvals.prompt(prompt)
+        return result if result is not None else await super()._send_exec_approval_prompt(prompt)
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         ok = await super().connect(is_reconnect=is_reconnect)
@@ -149,7 +247,14 @@ class MatrixAdapter(_NativeMatrixAdapter):
                 if self._session_receipts and str(event_type) == "m.room.message":
                     request = lambda *args: matrix_request(*credentials(self._session_receipts.workspace))(*args)
                     content = await asyncio.to_thread(capture_audience, request, str(room_id), content)
-            return await original(room_id, event_type, content, *args, **kwargs)
+            result = await original(room_id, event_type, content, *args, **kwargs)
+            run = self._direct_runs.get(str(room_id))
+            if run and str(event_type) == "m.room.message":
+                serialized = content if isinstance(content, dict) else content.serialize()
+                if serialized.get("msgtype") == "m.text":
+                    relation = serialized.get("m.relates_to", {})
+                    run["message_id"] = relation.get("event_id") if relation.get("rel_type") == "m.replace" else str(result)
+            return result
 
         self._client.send_message_event = types.MethodType(wrapped, self._client)
         self._client._agentteams_mentions_wrapped = True  # type: ignore[attr-defined]
@@ -171,6 +276,9 @@ class MatrixAdapter(_NativeMatrixAdapter):
             self._dual_allow = DualAllowList.from_env()
         is_dm = await self._is_dm_room(room_id)
         if not self._dual_allow.permits(sender, is_dm=is_dm):
+            return None
+
+        if await self._dashboard_approvals.answer(room_id, sender, body):
             return None
 
         ctx = await super()._resolve_message_context(

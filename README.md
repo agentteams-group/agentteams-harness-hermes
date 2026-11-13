@@ -1,6 +1,13 @@
 # agentteams-harness-hermes
 
 Hermes runtime integration for [AgentTeams](https://github.com/agentscope-ai/AgentTeams).
+
+Native tool approvals render as inline Dashboard cards. With Hermes' approval
+policy enabled (`HERMES_YOLO_MODE=0`), approving resumes the exact native waiter;
+rejecting or timing out denies execution. Replies are bound to the requesting
+human, room and request. Native settlement sends the final card receipt.
+Existing permission defaults are unchanged. `make smoke` tests approve, deny and
+expiry against the image's pinned Hermes approval service.
 Migrated from `hermes/` at AgentTeams commit
 `41ef2358abc2af7519356d1cd5b9f72392f70af6` (Apache-2.0).
 The upstream [Hermes Agent](https://github.com/NousResearch/hermes-agent) is MIT-licensed.
