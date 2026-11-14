@@ -1,4 +1,9 @@
 #!/bin/bash
+if [ "${AGENTTEAMS_LOG_CAPTURED:-}" != "1" ]; then
+    exec python3 "${AGENTTEAMS_LOG_LIB_DIR:-/opt/agentteams/scripts/lib}/runtime_supervisor.py" --runtime hermes -- bash "$0" "$@"
+fi
+python3 "${AGENTTEAMS_LOG_LIB_DIR:-/opt/agentteams/scripts/lib}/runtime_observability.py" bootstrap
+
 # hermes-worker-entrypoint.sh - Hermes Worker Agent container startup
 # Reads config from environment variables and launches hermes-worker.
 #
