@@ -33,6 +33,12 @@ from hermes_matrix.policies import (
 
 logger = logging.getLogger(__name__)
 try:
+    from runtime_observability import event as trace_event
+except ImportError:
+    def trace_event(*args, **kwargs):
+        pass  # Standalone packages can run without container logging.
+
+try:
     from agentteams_receipts import Receipts, capture_audience, credentials, matrix_request
 except ModuleNotFoundError:
     Receipts = None  # Standalone older installations do not advertise support.
@@ -208,9 +214,15 @@ class MatrixAdapter(_NativeMatrixAdapter):
         return result if result is not None else await super()._send_exec_approval_prompt(prompt)
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
-        ok = await super().connect(is_reconnect=is_reconnect)
+        trace_event("startup.stage", stage="matrix.connect")
+        try:
+            ok = await super().connect(is_reconnect=is_reconnect)
+        except Exception as exc:
+            trace_event("startup.failed", stage="matrix.connect", error_type=type(exc).__name__, error=str(exc)[:4096])
+            raise
         if ok and self._client is not None:
             self._wrap_send_message_event()
+            trace_event("runtime.ready", evidence="native_matrix_connect")
             if os.getenv("AGENTTEAMS_CONTROLLER_URL"):
                 reporter = await asyncio.create_subprocess_exec(
                     "agt", "worker", "report-ready", "--name",
@@ -218,6 +230,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
                 )
                 if await reporter.wait() != 0:
                     logger.warning("Controller readiness report failed after Matrix connected")
+        else:
+            trace_event("startup.failed", stage="matrix.connect", error="Native Matrix adapter did not connect")
         return ok
 
     def _is_sender_authorized(self, user_id: str, *args, **kwargs):
@@ -247,7 +261,12 @@ class MatrixAdapter(_NativeMatrixAdapter):
                 if self._session_receipts and str(event_type) == "m.room.message":
                     request = lambda *args: matrix_request(*credentials(self._session_receipts.workspace))(*args)
                     content = await asyncio.to_thread(capture_audience, request, str(room_id), content)
-            result = await original(room_id, event_type, content, *args, **kwargs)
+            try:
+                result = await original(room_id, event_type, content, *args, **kwargs)
+            except Exception as exc:
+                trace_event("message.send_failed", room_id=str(room_id), error_type=type(exc).__name__, error=str(exc)[:4096])
+                raise
+            trace_event("message.sent", room_id=str(room_id), event_id=str(result), message_type=str(event_type))
             run = self._direct_runs.get(str(room_id))
             if run and str(event_type) == "m.room.message":
                 serialized = content if isinstance(content, dict) else content.serialize()
@@ -298,6 +317,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
                 self._history.record(room_id, display, history_body, event_id)
             return None
 
+        trace_event("message.received", room_id=room_id, event_id=event_id, sender=sender)
         body, is_dm, chat_type, thread_id, display_name, source = ctx
         if is_dm:
             return body, is_dm, chat_type, thread_id, display_name, source
