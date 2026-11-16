@@ -13,7 +13,8 @@ from hermes_matrix.overlay_adapter import MatrixAdapter
 
 async def check(workspace):
     (workspace / "openclaw.json").write_text(json.dumps({"team_id": "team"}))
-    os.environ.update(AGENTTEAMS_WORKER_HOME=str(workspace), AGENTTEAMS_PROCESS_ID="actual-start")
+    os.environ.update(AGENTTEAMS_WORKER_HOME=str(workspace), AGENTTEAMS_PROCESS_ID="actual-start",
+                      AGENTTEAMS_CONTROLLER_URL="http://task-client-fixture.invalid")
     task = {"task_id": "stable-task", "status": "in_progress", "room_id": "!task:test", "execution": {
         "generation": 2, "checkpoint": {"version": 3, "completed_steps": ["one"], "remaining_steps": ["two", "three"]}}}
     recovery = Mock()
