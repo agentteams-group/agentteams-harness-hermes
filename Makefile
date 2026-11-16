@@ -23,3 +23,7 @@ smoke:
 
 direct-control-smoke:
 	docker run --rm --entrypoint /bin/sh -v "$(CURDIR):/dm:ro" -e PYTHONPATH=/dm/src $(IMAGE):$(VERSION) -ec '/opt/venv/hermes/bin/python -m pip install pytest pytest-asyncio; /opt/venv/hermes/bin/python -m pytest /dm/tests/test_direct_control.py -q'
+
+# Run the installed SDK admission boundary without a model or external service.
+native-coordination-smoke:
+	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_coordination_smoke.py
