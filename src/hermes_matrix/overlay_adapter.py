@@ -226,10 +226,13 @@ class MatrixAdapter(_NativeMatrixAdapter):
         runner = getattr(self._message_handler, "__self__", None)
         session = runner.session_store.lookup_by_session_key(session_key) if runner else None
         if session and session.session_id == identity["session_id"]:
-            await asyncio.to_thread(runner.session_store.set_session_metadata, session_key, "agentteams_recovery", {
+            marker = {
                 "task": [team, task_id], "runtime": "hermes", "source_user_id": event.source.user_id,
                 "expires_at": time.time() + 86400,
-                "checkpoint_digest": recovery.digest(saved["execution"]["checkpoint"])})
+                "checkpoint_digest": recovery.digest(saved["execution"]["checkpoint"])}
+            if await asyncio.to_thread(runner.session_store.set_session_metadata, session_key, "agentteams_recovery", marker):
+                trace_event("task.recovery.cache", task_id=task_id, team_id=team, session_id=session.session_id,
+                    expires_at=marker["expires_at"], checkpoint_digest=marker["checkpoint_digest"])
         record_delivery(types.SimpleNamespace(success=True, message_id=str(result)))
 
     async def _on_room_message(self, event):
