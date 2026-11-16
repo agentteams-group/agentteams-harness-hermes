@@ -201,6 +201,8 @@ RUN SITE=/opt/venv/hermes/lib/python3.14/site-packages \
 # our policy overlay.
 COPY plugins/ /opt/agentteams/hermes-plugins/
 
+ENV PYTHONPATH=/opt/agentteams/scripts/lib
+
 # Symlinks for hermes CLI on PATH (used by entrypoint and skills)
 RUN if [ -f /opt/venv/hermes/bin/hermes ]; then \
         ln -sf /opt/venv/hermes/bin/hermes /usr/local/bin/hermes; \
