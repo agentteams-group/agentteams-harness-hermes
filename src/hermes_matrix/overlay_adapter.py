@@ -134,8 +134,10 @@ class MatrixAdapter(_NativeMatrixAdapter):
             return
         # The receipt admits the Leader's self-addressed closure without
         # weakening the native own-echo policy for ordinary messages.
+        # A real Matrix event starts the native thread/session. Keep opaque
+        # Controller receipt session IDs out of Matrix transport thread IDs.
         source = self.build_source(chat_id=str(event.room_id), chat_type="group",
-            user_id=str(event.sender), thread_id=packet["session_id"])
+            user_id=str(event.sender), thread_id=str(event.event_id))
         from gateway.platforms.event import MessageEvent
         await self.handle_message(MessageEvent(text=packet["text"], source=source,
             message_id=str(event.event_id), raw_message=content))
