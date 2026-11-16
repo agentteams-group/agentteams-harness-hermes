@@ -5,7 +5,8 @@ VERSION ?= v0.1.0
 PLATFORMS ?= linux/amd64,linux/arm64
 SHARED_CONTEXT ?= https://github.com/agentscope-ai/AgentTeams.git\#$(AT_REF):shared/lib
 TRACE_CONTEXT ?= https://github.com/agentscope-ai/AgentTeams.git\#$(AT_REF):plugins/teamharness/adapters/qwenpaw
-BUILD_ARGS = --build-context shared=$(SHARED_CONTEXT) --build-context teamharness_trace=$(TRACE_CONTEXT) --build-arg HERMES_GIT_REF=$(HERMES_GIT_REF)
+TEAMHARNESS_CONTEXT ?= https://github.com/agentscope-ai/AgentTeams.git\#$(AT_REF):plugins/teamharness
+BUILD_ARGS = --build-context shared=$(SHARED_CONTEXT) --build-context teamharness_trace=$(TRACE_CONTEXT) --build-context teamharness=$(TEAMHARNESS_CONTEXT) --build-arg HERMES_GIT_REF=$(HERMES_GIT_REF)
 
 .PHONY: build push test smoke
 build:
@@ -27,3 +28,7 @@ direct-control-smoke:
 # Run the installed SDK admission boundary without a model or external service.
 native-coordination-smoke:
 	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_coordination_smoke.py
+
+native-recovery-smoke:
+	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_recovery_smoke.py
+	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_task_tools_smoke.py

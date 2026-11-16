@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -533,6 +534,29 @@ def bridge_openclaw_to_hermes(
     terminal = existing_yaml.setdefault("terminal", {})
     terminal.setdefault("backend", "local")
     terminal.setdefault("cwd", str(hermes_home))
+
+    # Team Task tools consume the Controller's own role/scope contract. Keep
+    # the legacy model/Matrix bridge, but do not infer scope from local Tasks.
+    runtime_path = hermes_home.parent / "runtime/runtime.yaml"
+    if runtime_path.is_file():
+        runtime = yaml.safe_load(runtime_path.read_text()) or {}
+        member = runtime.get("member", {})
+        if member.get("runtime") == "hermes":
+            os.environ["TEAMHARNESS_RUNTIME_CONFIG"] = str(runtime_path)
+        if member.get("runtime") == "hermes" and not runtime.get("team", {}).get("name"):
+            existing_yaml.get("mcp_servers", {}).pop("teamharness", None)
+        if member.get("runtime") == "hermes" and runtime.get("team", {}).get("name"):
+            role = {"team_leader": "leader", "standalone": "worker"}.get(member.get("role"), member.get("role"))
+            tool_env = {key: value for key, value in os.environ.items()
+                        if key.startswith(("AGENTTEAMS_", "TEAMHARNESS_", "MC_", "OTEL_"))}
+            tool_env.update(AGENTTEAMS_AGENT_ROLE=role, AGENTTEAMS_WORKER_ROLE=role,
+                TEAMHARNESS_RUNTIME_CONFIG=str(runtime_path), TEAMHARNESS_SHARED_DIR=str(hermes_home.parent / "shared"),
+                PYTHONPATH=os.getenv("AGENTTEAMS_LOG_LIB_DIR", "/opt/agentteams/scripts/lib"))
+            plugin = os.getenv("AGENTTEAMS_PLUGIN_DIR", "/opt/agentteams/plugins/teamharness")
+            existing_yaml.setdefault("mcp_servers", {})["teamharness"] = {
+                "command": sys.executable, "args": [str(Path(plugin) / "mcp/server.py")],
+                "cwd": plugin, "env": tool_env,
+            }
 
     config_path.write_text(
         yaml.safe_dump(

@@ -448,7 +448,7 @@ class Worker:
         if "config/mcporter.json" in pulled_files:
             self._copy_mcporter_config()
 
-        if "openclaw.json" not in pulled_files:
+        if "openclaw.json" not in pulled_files and "runtime/runtime.yaml" not in pulled_files:
             return
 
         console.print("[yellow]openclaw.json changed; re-bridging...[/yellow]")

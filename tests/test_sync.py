@@ -10,6 +10,18 @@ from hermes_worker import sync as sync_module
 from hermes_worker.sync import FileSync, push_local
 
 
+def test_projected_task_scope_wins_over_old_local_team_context(tmp_path):
+    sync = FileSync(endpoint="http://minio:9000", access_key="test", secret_key="test",
+                    bucket="test", worker_name="worker", local_dir=tmp_path)
+    (tmp_path / "AGENTS.md").write_text("**Team**: old-team")
+    runtime = tmp_path / "runtime/runtime.yaml"
+    runtime.parent.mkdir()
+    runtime.write_text('member: {runtime: hermes}\nteam: {name: new-team}\n')
+    assert sync._get_team_id() == "new-team"
+    runtime.write_text('member: {runtime: hermes}\n')
+    assert sync._get_team_id() is None
+
+
 def test_manager_role_projection_does_not_overwrite_personality(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "manager")
     sync = FileSync(endpoint="http://minio:9000", access_key="test", secret_key="test",

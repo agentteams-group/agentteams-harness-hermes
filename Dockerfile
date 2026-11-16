@@ -172,7 +172,7 @@ RUN python -m pip install --no-cache-dir \
     && UV_PROJECT_ENVIRONMENT=/opt/venv/hermes \
        UV_INDEX_URL="${PIP_INDEX_URL}" \
        UV_CACHE_DIR=/tmp/uv-cache \
-       uv sync --frozen --no-dev --extra matrix \
+       uv sync --frozen --no-dev --extra matrix --extra mcp \
            --project /opt/hermes-src \
            --python /usr/local/bin/python3 \
     && UV_INDEX_URL="${PIP_INDEX_URL}" \
@@ -200,6 +200,7 @@ RUN SITE=/opt/venv/hermes/lib/python3.14/site-packages \
 # plugins precedence, and its register() subclasses the bundled adapter with
 # our policy overlay.
 COPY plugins/ /opt/agentteams/hermes-plugins/
+COPY --from=teamharness . /opt/agentteams/plugins/teamharness/
 
 ENV PYTHONPATH=/opt/agentteams/scripts/lib
 
