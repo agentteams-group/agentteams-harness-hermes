@@ -129,9 +129,6 @@ class MatrixAdapter(_NativeMatrixAdapter):
         from task_recovery import Recovery, enabled
         if not enabled():
             return
-        config_path = Path(os.getenv("AGENTTEAMS_WORKER_HOME") or os.environ["HOME"]) / "openclaw.json"
-        if not config_path.is_file() or not json.loads(config_path.read_text()).get("team_id"):
-            return
         recovery = Recovery()
         snapshot = await asyncio.to_thread(recovery.discover)
         from gateway.platforms.event import MessageEvent

@@ -12,7 +12,9 @@ from hermes_matrix.overlay_adapter import MatrixAdapter
 
 
 async def check(workspace):
-    (workspace / "openclaw.json").write_text(json.dumps({"team_id": "team"}))
+    # Real Controller-generated OpenClaw config has no team_id. Assignment
+    # scope comes from the authenticated self-discovery API, not this cache.
+    (workspace / "openclaw.json").write_text(json.dumps({"agents": {"defaults": {}}}))
     os.environ.update(AGENTTEAMS_WORKER_HOME=str(workspace), AGENTTEAMS_PROCESS_ID="actual-start",
                       AGENTTEAMS_CONTROLLER_URL="http://task-client-fixture.invalid")
     task = {"task_id": "stable-task", "status": "in_progress", "room_id": "!task:test", "execution": {
