@@ -30,5 +30,6 @@ def test_recovery_claim_precedes_connect_without_blocking_initial_sync(monkeypat
         monkeypatch.setattr(native, "_on_room_message", on_message, raising=False)
         monkeypatch.setattr(native, "connect", connect, raising=False)
         assert await asyncio.wait_for(adapter.connect(), timeout=1)
+        assert await asyncio.wait_for(adapter.connect(is_reconnect=True), timeout=1)
     asyncio.run(check())
-    assert order == ["claim-only", "native-sync", "resume"]
+    assert order == ["claim-only", "native-sync", "resume"] * 2

@@ -326,16 +326,14 @@ class MatrixAdapter(_NativeMatrixAdapter):
             # Native connect can dispatch its initial sync synchronously.
             # Claim before connecting; waiting for a post-connect gate in a
             # message callback would deadlock and advance past that input.
-            if not is_reconnect:
-                await self._recover_tasks(claim_only=True)
+            await self._recover_tasks(claim_only=True)
             ok = await super().connect(is_reconnect=is_reconnect)
         except Exception as exc:
             trace_event("startup.failed", stage="matrix.connect", error_type=type(exc).__name__, error=str(exc)[:4096])
             raise
         if ok and self._client is not None:
             self._wrap_send_message_event()
-            if not is_reconnect:
-                await self._recover_tasks()
+            await self._recover_tasks()
             trace_event("runtime.ready", evidence="native_matrix_connect")
             if os.getenv("AGENTTEAMS_CONTROLLER_URL"):
                 reporter = await asyncio.create_subprocess_exec(
