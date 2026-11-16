@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -11,6 +12,7 @@ from gateway.config import PlatformConfig, GatewayConfig
 from gateway.run import GatewayRunner
 from gateway.session import SessionStore
 from hermes_matrix.overlay_adapter import MatrixAdapter
+from task_recovery import Recovery
 
 
 async def check(workspace):
@@ -22,6 +24,8 @@ async def check(workspace):
     task = {"task_id": "stable-task", "status": "in_progress", "room_id": "!task:test", "execution": {
         "generation": 2, "checkpoint": {"version": 3, "completed_steps": ["one"], "remaining_steps": ["two", "three"]}}}
     recovery = Mock()
+    recovery.digest = Recovery.digest
+    recovery.session_usable = Recovery.session_usable
     recovery.discover.return_value = {"instance_id": "new-start", "tasks": [{"team_id": "team", "task": task, "etag": "read-version"}]}
     recovery.claim.return_value = {"task": task, "spec": "Do one, two, three", "saved_result": "Saved answer"}
     recovery.current.return_value = task
@@ -40,7 +44,8 @@ async def check(workspace):
     from types import MethodType
     adapter._message_handler = MethodType(admit, runner)
     adapter.handle_message = adapter._message_handler
-    with patch("task_recovery.enabled", return_value=True), patch("task_recovery.Recovery", return_value=recovery):
+    with patch("task_recovery.enabled", return_value=True), patch("task_recovery.Recovery", return_value=recovery) as factory:
+        factory.digest = Recovery.digest
         await asyncio.gather(adapter._recover_tasks(), adapter._recover_tasks())
         assert len(observed) == 1
         event = observed[0]
@@ -75,12 +80,16 @@ async def check(workspace):
         recovery.delivered.assert_called_once_with("stable-task", "team", "$sent")
         adapter._client.send_message_event.reset_mock()
         recovery.prepare_reply.return_value = ({"execution": {"checkpoint": cp}}, "Saved authoritative answer")
+        recovery.delivered.return_value = {"execution": {"checkpoint": cp}}
         recorded = Mock()
         await adapter._send_final_text(event, adapter._event_session_key(event), "Final answer", {}, False, 0, recorded)
         recovery.prepare_reply.assert_called_once_with("stable-task", "team", "Final answer")
         assert adapter._client.send_message_event.call_args.args[2]["body"] == "Saved authoritative answer"
         assert adapter._client.send_message_event.call_args.kwargs["txn_id"] == "stable-reply"
         assert recorded.call_args.args[0].success is True
+        marker = runner.session_store.get_session_metadata(key, "agentteams_recovery")
+        assert marker["task"] == ["team", "stable-task"]
+        assert marker["checkpoint_digest"] == Recovery.digest(cp)
         # A delivered progress turn does not complete the authoritative Task.
         cp["delivery"] = "delivered"
         task["execution"]["generation"] = 3
@@ -97,6 +106,30 @@ async def check(workspace):
         assert len(observed) == 3
         assert observed[-1].message_id == "$original-assignment"
         assert observed[-1].source.user_id == "@leader:test"
+        for case in ("valid", "expired", "stale", "foreign", "missing"):
+            previous = observed[-1]
+            key = runner._session_key_for_source(previous.source)
+            old_id = previous._agentteams_recovery["session_id"]
+            marker = {"task": ["team", "stable-task"], "runtime": "hermes",
+                "source_user_id": "@leader:test", "expires_at": time.time()+3600,
+                "checkpoint_digest": Recovery.digest(task["execution"]["checkpoint"])}
+            if case == "expired":
+                marker["expires_at"] = time.time()-1
+            elif case == "stale":
+                marker["checkpoint_digest"] = "older-checkpoint"
+            elif case == "foreign":
+                marker["runtime"] = "codex"
+            runner.session_store.set_session_metadata(key, "agentteams_recovery", marker)
+            if case == "missing":
+                runner.session_store.remove_by_session_id(old_id)
+            # Reopen the real SDK store, as happens after process replacement.
+            runner.session_store = SessionStore(workspace / "sessions", GatewayConfig())
+            task["execution"]["generation"] += 1
+            await adapter._recover_tasks()
+            current = observed[-1]
+            assert (current._agentteams_recovery["session_id"] == old_id) == (case == "valid"), case
+            if case == "valid":
+                assert current.source.user_id == "@leader:test"
     print("Hermes installed SDK recovery event/session shape, single admission and stable saved-reply delivery: passed (mocked Task client)")
 
 

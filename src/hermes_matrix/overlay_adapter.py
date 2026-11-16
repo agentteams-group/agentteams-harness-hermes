@@ -18,6 +18,7 @@ import logging
 import asyncio
 import json
 import os
+import time
 from pathlib import Path
 import types
 from contextvars import ContextVar
@@ -162,29 +163,43 @@ class MatrixAdapter(_NativeMatrixAdapter):
                 continue
             if admission in self._recovered_admissions:
                 continue
+            runner = getattr(self._message_handler, "__self__", None)
+            if runner is None or getattr(runner, "session_store", None) is None:
+                raise RuntimeError("native Hermes session store is unavailable for Task recovery")
+            store = runner.session_store
+            cached = next((session for session in await asyncio.to_thread(store.list_sessions)
+                if session.metadata.get("agentteams_recovery", {}).get("task") == [team, task_id]
+                and recovery.session_usable(session.metadata["agentteams_recovery"], task, "hermes")), None)
             # Recovery is a trusted local admission, never a forged Matrix
             # source event or a migrated foreign native session.
             event = MessageEvent(text=recovery.resume_text({**task, "team_id": team, "spec": claimed["spec"]}),
                 source=self.build_source(chat_id=room, chat_type="group",
-                    user_id=str(source_event.sender if source_event else self._user_id)),
+                    user_id=str(source_event.sender if source_event else
+                        cached.metadata["agentteams_recovery"]["source_user_id"] if cached else self._user_id)),
                 message_id=str(source_event.event_id) if source_event else "recovery:"+team+"/"+task_id+":"+str(task["execution"]["generation"]), raw_message={},
                 internal=True, allow_gateway_control=False)
             event._agentteams_recovery = {"task_id": task_id, "team_id": team, "generation": task["execution"]["generation"]}
-            runner = getattr(self._message_handler, "__self__", None)
-            if runner is None or getattr(runner, "session_store", None) is None:
-                raise RuntimeError("native Hermes session store is unavailable for Task recovery")
             session_key = runner._session_key_for_source(event.source)
             if runner._is_session_running(session_key) or session_key in self._active_sessions:
                 raise RuntimeError("native Hermes session is busy; Task recovery must wait")
-            # Adapter queue keys do not select the SDK's conversation. Use its
-            # real session transition API so old room history cannot supersede
-            # this Task's shared checkpoint. Valid-session reuse is still open.
-            session = await asyncio.to_thread(runner.session_store.get_or_create_session,
-                event.source, force_new=True, touch_activity=False)
+            current = await asyncio.to_thread(store.lookup_by_session_key, session_key)
+            reuse = bool(cached and current and current.session_id == cached.session_id)
+            if reuse:
+                try:
+                    db = store._db_for_key(session_key)
+                    row = await asyncio.to_thread(db.get_session, cached.session_id) if db else None
+                    reuse = bool(row and row.get("end_reason") is None)
+                except Exception:
+                    # An unreadable native cache is never recovery authority.
+                    reuse = False
+            # The SDK also checks its own expiration and persisted session row.
+            # Only a matching shared checkpoint permits attempting native reuse.
+            session = await asyncio.to_thread(store.get_or_create_session,
+                event.source, force_new=not reuse, touch_activity=False)
             event._agentteams_recovery["session_id"] = session.session_id
             trace_event("task.recovery.session", task_id=task_id, team_id=team,
                 generation=task["execution"]["generation"], session_id=session.session_id,
-                checkpoint_version=cp.get("version", 0))
+                checkpoint_version=cp.get("version", 0), reused=bool(reuse and session.session_id == cached.session_id))
             await self.handle_message(event)
             if not getattr(event, "_gateway_accepted", False):
                 raise RuntimeError("native Hermes gateway did not admit recovered Task")
@@ -207,7 +222,14 @@ class MatrixAdapter(_NativeMatrixAdapter):
             return
         result = await self._client.send_message_event(RoomID(event.source.chat_id), EventType.ROOM_MESSAGE,
             {"msgtype": "m.text", "body": text_content, "org.agentteams.progress_only": True}, txn_id=cp["reply_txn"])
-        await asyncio.to_thread(recovery.delivered, task_id, team, str(result))
+        saved = await asyncio.to_thread(recovery.delivered, task_id, team, str(result))
+        runner = getattr(self._message_handler, "__self__", None)
+        session = runner.session_store.lookup_by_session_key(session_key) if runner else None
+        if session and session.session_id == identity["session_id"]:
+            await asyncio.to_thread(runner.session_store.set_session_metadata, session_key, "agentteams_recovery", {
+                "task": [team, task_id], "runtime": "hermes", "source_user_id": event.source.user_id,
+                "expires_at": time.time() + 86400,
+                "checkpoint_digest": recovery.digest(saved["execution"]["checkpoint"])})
         record_delivery(types.SimpleNamespace(success=True, message_id=str(result)))
 
     async def _on_room_message(self, event):
