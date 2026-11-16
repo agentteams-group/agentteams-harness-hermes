@@ -200,6 +200,7 @@ RUN SITE=/opt/venv/hermes/lib/python3.14/site-packages \
 # plugins precedence, and its register() subclasses the bundled adapter with
 # our policy overlay.
 COPY plugins/ /opt/agentteams/hermes-plugins/
+COPY --from=teamharness . /opt/agentteams/plugins/teamharness/
 
 # Symlinks for hermes CLI on PATH (used by entrypoint and skills)
 RUN if [ -f /opt/venv/hermes/bin/hermes ]; then \

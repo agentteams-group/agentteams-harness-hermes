@@ -46,7 +46,8 @@ For local changes to shared AgentTeams code:
 
 ```sh
 make build SHARED_CONTEXT=../AgentTeams/shared/lib \
-  TRACE_CONTEXT=../AgentTeams/plugins/teamharness/adapters/qwenpaw
+  TRACE_CONTEXT=../AgentTeams/plugins/teamharness/adapters/qwenpaw \
+  TEAMHARNESS_CONTEXT=../AgentTeams/plugins/teamharness
 ```
 
 Unit tests need Python 3.11+ and the worker's Python dependencies:
