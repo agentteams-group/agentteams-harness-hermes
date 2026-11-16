@@ -123,7 +123,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
         self._dashboard_approvals = MatrixApprovals(self._send_dashboard_approval)
         self._recovered_admissions = set()
 
-    async def _recover_tasks(self, only_task=None, *, claim_only=False):
+    async def _recover_tasks(self, only_task=None, *, claim_only=False, source_event=None):
         if not os.getenv("AGENTTEAMS_CONTROLLER_URL") or not os.getenv("AGENTTEAMS_PROCESS_ID"):
             return
         from task_recovery import Recovery, enabled
@@ -159,8 +159,9 @@ class MatrixAdapter(_NativeMatrixAdapter):
             # Recovery is a trusted local admission, never a forged Matrix
             # source event or a migrated foreign native session.
             event = MessageEvent(text=recovery.resume_text({**task, "team_id": team, "spec": claimed["spec"]}),
-                source=self.build_source(chat_id=room, chat_type="group", user_id=str(self._user_id)),
-                message_id="recovery:"+team+"/"+task_id+":"+str(task["execution"]["generation"]), raw_message={},
+                source=self.build_source(chat_id=room, chat_type="group",
+                    user_id=str(source_event.sender if source_event else self._user_id)),
+                message_id=str(source_event.event_id) if source_event else "recovery:"+team+"/"+task_id+":"+str(task["execution"]["generation"]), raw_message={},
                 internal=True, allow_gateway_control=False)
             event._agentteams_recovery = {"task_id": task_id, "team_id": team, "generation": task["execution"]["generation"]}
             runner = getattr(self._message_handler, "__self__", None)
@@ -218,7 +219,10 @@ class MatrixAdapter(_NativeMatrixAdapter):
         from task_recovery import enabled
         canonical = packet["meta"]["teamharness_coordination"]
         if canonical["kind"] == "task_assigned" and enabled():
-            await self._recover_tasks(canonical["task_id"])
+            # Retain this verified Matrix source when its Task input enters
+            # the native session. Startup-only recovery has no source event
+            # and must never manufacture a Matrix read receipt.
+            await self._recover_tasks(canonical["task_id"], source_event=event)
             return
         # The receipt admits the Leader's self-addressed closure without
         # weakening the native own-echo policy for ordinary messages.

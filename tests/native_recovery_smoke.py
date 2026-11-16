@@ -91,6 +91,12 @@ async def check(workspace):
         task["execution"]["generation"] = 4
         await adapter._recover_tasks()
         assert len(observed) == 2
+        task["status"] = "in_progress"
+        task["execution"]["generation"] = 5
+        await adapter._recover_tasks("stable-task", source_event=SimpleNamespace(event_id="$original-assignment", sender="@leader:test"))
+        assert len(observed) == 3
+        assert observed[-1].message_id == "$original-assignment"
+        assert observed[-1].source.user_id == "@leader:test"
     print("Hermes installed SDK recovery event/session shape, single admission and stable saved-reply delivery: passed (mocked Task client)")
 
 
