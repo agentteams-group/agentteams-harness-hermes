@@ -196,6 +196,10 @@ class MatrixAdapter(_NativeMatrixAdapter):
             # Only a matching shared checkpoint permits attempting native reuse.
             session = await asyncio.to_thread(store.get_or_create_session,
                 event.source, force_new=not reuse, touch_activity=False)
+            if not reuse or session.session_id != cached.session_id:
+                # SessionStore routing alone does not replace a warm AIAgent:
+                # its cached transcript would keep writing the previous row.
+                runner._evict_cached_agent(session_key)
             event._agentteams_recovery["session_id"] = session.session_id
             trace_event("task.recovery.session", task_id=task_id, team_id=team,
                 generation=task["execution"]["generation"], session_id=session.session_id,

@@ -38,6 +38,11 @@ async def check(workspace):
     runner.config = SimpleNamespace(multiplex_profiles=False)
     runner.session_store = SessionStore(workspace / "sessions", GatewayConfig())
     runner._is_session_running = Mock(return_value=False)
+    runner._peek_session_state = Mock(return_value=None)
+    runner._running_agent_ids = Mock(return_value=set())
+    runner._spawn_release_thread = Mock()
+    key = runner._session_key_for_source(adapter.build_source(chat_id=task["room_id"], chat_type="group", user_id=adapter._user_id))
+    runner._agent_cache = {key: (SimpleNamespace(session_id="old-native-conversation"), None, 0)}
     async def admit(self, event):
         observed.append(event)
         event._gateway_accepted = True
@@ -48,6 +53,7 @@ async def check(workspace):
         factory.digest = Recovery.digest
         await asyncio.gather(adapter._recover_tasks(), adapter._recover_tasks())
         assert len(observed) == 1
+        assert key not in runner._agent_cache, "fresh SessionStore entry still reused the previous in-memory Agent"
         event = observed[0]
         assert event.text == "Resume step two from checkpoint three"
         assert event._agentteams_recovery["task_id"] == "stable-task"
