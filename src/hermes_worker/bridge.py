@@ -541,6 +541,8 @@ def bridge_openclaw_to_hermes(
     if runtime_path.is_file():
         runtime = yaml.safe_load(runtime_path.read_text()) or {}
         member = runtime.get("member", {})
+        if member.get("runtime") == "hermes":
+            os.environ["TEAMHARNESS_RUNTIME_CONFIG"] = str(runtime_path)
         if member.get("runtime") == "hermes" and not runtime.get("team", {}).get("name"):
             existing_yaml.get("mcp_servers", {}).pop("teamharness", None)
         if member.get("runtime") == "hermes" and runtime.get("team", {}).get("name"):

@@ -60,6 +60,7 @@ def _bridge_and_read(openclaw_cfg: dict, initial_config: dict | None = None) -> 
 
 
 def test_team_task_tools_use_projected_scope_and_actual_process(tmp_path, monkeypatch):
+    monkeypatch.delenv("TEAMHARNESS_RUNTIME_CONFIG", raising=False)
     runtime = tmp_path / "runtime/runtime.yaml"
     runtime.parent.mkdir()
     runtime.write_text(yaml.safe_dump({"member": {"runtime": "hermes", "role": "worker"}, "team": {"name": "team-a"}}))
@@ -72,6 +73,7 @@ def test_team_task_tools_use_projected_scope_and_actual_process(tmp_path, monkey
     assert server["env"]["AGENTTEAMS_PROCESS_ID"] == "actual-start"
     assert server["env"]["AGENTTEAMS_AGENT_ROLE"] == "worker"
     assert server["env"]["TEAMHARNESS_RUNTIME_CONFIG"] == str(runtime)
+    assert bridge_module.os.environ["TEAMHARNESS_RUNTIME_CONFIG"] == str(runtime)
     assert server["env"]["TEAMHARNESS_SHARED_DIR"] == str(tmp_path / "shared")
     config["mcp_servers"]["custom"] = {"command": "custom-mcp"}
     (home / "config.yaml").write_text(yaml.safe_dump(config))
