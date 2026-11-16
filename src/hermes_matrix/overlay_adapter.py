@@ -121,11 +121,9 @@ class MatrixAdapter(_NativeMatrixAdapter):
         self._session_receipts = Receipts(os.getenv("AGENTTEAMS_WORKER_HOME") or os.environ["HOME"]) if Receipts else None
         self._direct_runs: dict[str, dict] = {}
         self._dashboard_approvals = MatrixApprovals(self._send_dashboard_approval)
-        self._recovery_admission = asyncio.Event()
-        self._recovery_admission.set()
         self._recovered_admissions = set()
 
-    async def _recover_tasks(self, only_task=None):
+    async def _recover_tasks(self, only_task=None, *, claim_only=False):
         from task_recovery import Recovery, enabled
         if not enabled():
             return
@@ -141,6 +139,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
             if only_task is not None and task_id != only_task:
                 continue
             claimed = await asyncio.to_thread(recovery.claim, snapshot, entry)
+            if claim_only:
+                continue
             task = claimed["task"]
             admission = (team, task_id, task["execution"]["generation"])
             cp = task["execution"].get("checkpoint") or {}
@@ -193,7 +193,6 @@ class MatrixAdapter(_NativeMatrixAdapter):
         record_delivery(types.SimpleNamespace(success=True, message_id=str(result)))
 
     async def _on_room_message(self, event):
-        await self._recovery_admission.wait()
         content = getattr(event, "content", None)
         content = content if isinstance(content, dict) else content.serialize() if hasattr(content, "serialize") else {}
         if "org.agentteams.coordination" not in content and content.get("org.agentteams.progress_only") is not True:
@@ -323,9 +322,12 @@ class MatrixAdapter(_NativeMatrixAdapter):
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         trace_event("startup.stage", stage="matrix.connect")
-        if not is_reconnect:
-            self._recovery_admission.clear()
         try:
+            # Native connect can dispatch its initial sync synchronously.
+            # Claim before connecting; waiting for a post-connect gate in a
+            # message callback would deadlock and advance past that input.
+            if not is_reconnect:
+                await self._recover_tasks(claim_only=True)
             ok = await super().connect(is_reconnect=is_reconnect)
         except Exception as exc:
             trace_event("startup.failed", stage="matrix.connect", error_type=type(exc).__name__, error=str(exc)[:4096])
@@ -334,7 +336,6 @@ class MatrixAdapter(_NativeMatrixAdapter):
             self._wrap_send_message_event()
             if not is_reconnect:
                 await self._recover_tasks()
-            self._recovery_admission.set()
             trace_event("runtime.ready", evidence="native_matrix_connect")
             if os.getenv("AGENTTEAMS_CONTROLLER_URL"):
                 reporter = await asyncio.create_subprocess_exec(
