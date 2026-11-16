@@ -112,12 +112,21 @@ async def check(workspace):
         assert len(observed) == 3
         assert observed[-1].message_id == "$original-assignment"
         assert observed[-1].source.user_id == "@leader:test"
-        for case in ("valid", "expired", "stale", "foreign", "missing"):
+        for case in ("valid", "expired", "stale", "foreign", "missing", "empty"):
             previous = observed[-1]
             key = runner._session_key_for_source(previous.source)
             old_id = previous._agentteams_recovery["session_id"]
-            marker = {"task": ["team", "stable-task"], "runtime": "hermes",
-                "source_user_id": "@leader:test", "expires_at": time.time()+3600,
+            if case == "empty":
+                task["task_id"] = "empty-native-task"
+                runner.session_store = SessionStore(workspace / "empty-case", GatewayConfig())
+                old_id = runner.session_store.get_or_create_session(previous.source, force_new=True).session_id
+            db = runner.session_store._db_for_key(key)
+            if case != "empty":
+                db.append_message(old_id, "user", "Persisted native Task history")
+            else:
+                assert not db.get_messages(old_id, limit=1)
+            marker = {"task": ["team", task["task_id"]], "runtime": "hermes",
+                "source_user_id": previous.source.user_id, "expires_at": time.time()+3600,
                 "checkpoint_digest": Recovery.digest(task["execution"]["checkpoint"])}
             if case == "expired":
                 marker["expires_at"] = time.time()-1
