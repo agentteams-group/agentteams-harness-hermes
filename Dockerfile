@@ -172,7 +172,7 @@ RUN python -m pip install --no-cache-dir \
     && UV_PROJECT_ENVIRONMENT=/opt/venv/hermes \
        UV_INDEX_URL="${PIP_INDEX_URL}" \
        UV_CACHE_DIR=/tmp/uv-cache \
-       uv sync --frozen --no-dev --extra matrix \
+       uv sync --frozen --no-dev --extra matrix --extra mcp \
            --project /opt/hermes-src \
            --python /usr/local/bin/python3 \
     && UV_INDEX_URL="${PIP_INDEX_URL}" \

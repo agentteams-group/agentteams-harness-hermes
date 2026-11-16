@@ -139,6 +139,7 @@ def _preview_text(value: str | None, limit: int = 2000) -> str:
 
 _STARTUP_SYNC_FILES = (
     "openclaw.json",
+    "runtime/runtime.yaml",
     "AGENTS.md",
     "SOUL.md",
     "HEARTBEAT.md",
@@ -334,6 +335,12 @@ class FileSync:
 
     def _get_team_id(self) -> Optional[str]:
         """Read team name from AGENTS.md team-context section."""
+        runtime_path = self.local_dir / "runtime/runtime.yaml"
+        if runtime_path.is_file():
+            import yaml
+            runtime = yaml.safe_load(runtime_path.read_text()) or {}
+            if runtime.get("member", {}).get("runtime") == "hermes":
+                return runtime.get("team", {}).get("name") or None
         agents_path = self.local_dir / "AGENTS.md"
         if agents_path.exists():
             try:
@@ -421,6 +428,7 @@ class FileSync:
         changed: list[str] = []
         files: dict[str, list[str]] = {
             "openclaw.json": [f"{self._prefix}/openclaw.json"],
+            "runtime/runtime.yaml": [f"{self._prefix}/runtime/runtime.yaml"],
             "config/mcporter.json": [
                 f"{self._prefix}/config/mcporter.json",
                 f"{self._prefix}/mcporter-servers.json",
@@ -563,6 +571,7 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
     }
     _EXCLUDE_PATHS = {
         "config/mcporter.json",
+        "runtime/runtime.yaml",
     }
     _EXCLUDE_DIRS = {
         ".agents",

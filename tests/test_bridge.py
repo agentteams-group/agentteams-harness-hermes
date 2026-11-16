@@ -59,6 +59,29 @@ def _bridge_and_read(openclaw_cfg: dict, initial_config: dict | None = None) -> 
         return yaml.safe_load((hermes_home / "config.yaml").read_text())
 
 
+def test_team_task_tools_use_projected_scope_and_actual_process(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime/runtime.yaml"
+    runtime.parent.mkdir()
+    runtime.write_text(yaml.safe_dump({"member": {"runtime": "hermes", "role": "worker"}, "team": {"name": "team-a"}}))
+    monkeypatch.setenv("AGENTTEAMS_PROCESS_ID", "actual-start")
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "standalone")
+    home = tmp_path / ".hermes"
+    bridge_openclaw_to_hermes(_make_openclaw_cfg(vision=False), home)
+    config = yaml.safe_load((home / "config.yaml").read_text())
+    server = config["mcp_servers"]["teamharness"]
+    assert server["env"]["AGENTTEAMS_PROCESS_ID"] == "actual-start"
+    assert server["env"]["AGENTTEAMS_AGENT_ROLE"] == "worker"
+    assert server["env"]["TEAMHARNESS_RUNTIME_CONFIG"] == str(runtime)
+    assert server["env"]["TEAMHARNESS_SHARED_DIR"] == str(tmp_path / "shared")
+    config["mcp_servers"]["custom"] = {"command": "custom-mcp"}
+    (home / "config.yaml").write_text(yaml.safe_dump(config))
+    runtime.write_text(yaml.safe_dump({"member": {"runtime": "hermes", "role": "standalone"}}))
+    bridge_openclaw_to_hermes(_make_openclaw_cfg(vision=False), home)
+    config = yaml.safe_load((home / "config.yaml").read_text())
+    assert "teamharness" not in config["mcp_servers"]
+    assert config["mcp_servers"]["custom"] == {"command": "custom-mcp"}
+
+
 def test_manager_role_is_bound_to_native_system_prompt(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "manager")
     bridge_openclaw_to_hermes(_make_openclaw_cfg(vision=False), tmp_path,
