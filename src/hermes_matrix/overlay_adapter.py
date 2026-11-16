@@ -152,8 +152,10 @@ class MatrixAdapter(_NativeMatrixAdapter):
                     {"msgtype": "m.text", "body": claimed["saved_result"], "org.agentteams.progress_only": True},
                     txn_id=cp["reply_txn"])
                 await asyncio.to_thread(recovery.delivered, task_id, team, str(result))
-                continue
-            if task["status"] == "submitted" or cp.get("delivery") == "delivered":
+                task = await asyncio.to_thread(recovery.current, task_id, team)
+                if task is None:
+                    continue
+            if task["status"] == "submitted":
                 continue
             if admission in self._recovered_admissions:
                 continue

@@ -20,6 +20,7 @@ async def check(workspace):
     recovery = Mock()
     recovery.discover.return_value = {"instance_id": "new-start", "tasks": [{"team_id": "team", "task": task, "etag": "read-version"}]}
     recovery.claim.return_value = {"task": task, "spec": "Do one, two, three", "saved_result": "Saved answer"}
+    recovery.current.return_value = task
     recovery.resume_text.return_value = "Resume step two from checkpoint three"
     adapter = MatrixAdapter(PlatformConfig(enabled=True))
     adapter._user_id = "@alice:test"
@@ -53,6 +54,15 @@ async def check(workspace):
         recovery.save_reply.assert_called_once_with("stable-task", "team", "Final answer")
         assert adapter._client.send_message_event.call_args.kwargs["txn_id"] == "stable-reply"
         assert recorded.call_args.args[0].success is True
+        # A delivered progress turn does not complete the authoritative Task.
+        cp["delivery"] = "delivered"
+        task["execution"]["generation"] = 3
+        await adapter._recover_tasks()
+        assert len(observed) == 2
+        task["status"] = "submitted"
+        task["execution"]["generation"] = 4
+        await adapter._recover_tasks()
+        assert len(observed) == 2
     print("Hermes installed SDK recovery event/session shape, single admission and stable saved-reply delivery: passed (mocked Task client)")
 
 
