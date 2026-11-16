@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import json
 import os
+from pathlib import Path
 import types
 from contextvars import ContextVar
 from typing import Any, Dict, Optional
@@ -119,8 +121,79 @@ class MatrixAdapter(_NativeMatrixAdapter):
         self._session_receipts = Receipts(os.getenv("AGENTTEAMS_WORKER_HOME") or os.environ["HOME"]) if Receipts else None
         self._direct_runs: dict[str, dict] = {}
         self._dashboard_approvals = MatrixApprovals(self._send_dashboard_approval)
+        self._recovery_admission = asyncio.Event()
+        self._recovery_admission.set()
+        self._recovered_admissions = set()
+
+    async def _recover_tasks(self, only_task=None):
+        from task_recovery import Recovery, enabled
+        if not enabled():
+            return
+        config_path = Path(os.getenv("AGENTTEAMS_WORKER_HOME") or os.environ["HOME"]) / "openclaw.json"
+        if not config_path.is_file() or not json.loads(config_path.read_text()).get("team_id"):
+            return
+        recovery = Recovery()
+        snapshot = await asyncio.to_thread(recovery.discover)
+        from gateway.platforms.event import MessageEvent
+        from mautrix.types import EventType, RoomID
+        for entry in snapshot["tasks"]:
+            task_id, team = entry["task"]["task_id"], entry["team_id"]
+            if only_task is not None and task_id != only_task:
+                continue
+            claimed = await asyncio.to_thread(recovery.claim, snapshot, entry)
+            task = claimed["task"]
+            admission = (team, task_id, task["execution"]["generation"])
+            cp = task["execution"].get("checkpoint") or {}
+            room = task["room_id"]
+            if cp.get("delivery") == "pending":
+                result = await self._client.send_message_event(RoomID(room), EventType.ROOM_MESSAGE,
+                    {"msgtype": "m.text", "body": claimed["saved_result"], "org.agentteams.progress_only": True},
+                    txn_id=cp["reply_txn"])
+                await asyncio.to_thread(recovery.delivered, task_id, team, str(result))
+                continue
+            if task["status"] == "submitted" or cp.get("delivery") == "delivered":
+                continue
+            if admission in self._recovered_admissions:
+                continue
+            # Recovery is a trusted local admission, never a forged Matrix
+            # source event or a migrated foreign native session.
+            event = MessageEvent(text=recovery.resume_text({**task, "team_id": team, "spec": claimed["spec"]}),
+                source=self.build_source(chat_id=room, chat_type="group", user_id=str(self._user_id)),
+                message_id="recovery:"+team+"/"+task_id+":"+str(task["execution"]["generation"]), raw_message={})
+            event._agentteams_recovery = {"task_id": task_id, "team_id": team, "generation": task["execution"]["generation"]}
+            await self.handle_message(event)
+            if not getattr(event, "_gateway_accepted", False):
+                raise RuntimeError("native Hermes gateway did not admit recovered Task")
+            self._recovered_admissions.add(admission)
+
+    def _event_session_key(self, event):
+        identity = getattr(event, "_agentteams_recovery", None)
+        if identity:
+            # A fresh native lane per verified process generation is the
+            # conservative first implementation. Valid-session reuse still
+            # needs checkpoint-consistent native persistence acceptance.
+            return super()._event_session_key(event)+":recovery:"+identity["team_id"]+"/"+identity["task_id"]+":"+str(identity["generation"])
+        return super()._event_session_key(event)
+
+    async def _send_final_text(self, event, session_key, text_content, metadata,
+                               is_ephemeral_response, ephemeral_ttl, record_delivery):
+        identity = getattr(event, "_agentteams_recovery", None)
+        if not identity:
+            return await super()._send_final_text(event, session_key, text_content, metadata,
+                is_ephemeral_response, ephemeral_ttl, record_delivery)
+        from task_recovery import Recovery
+        from mautrix.types import EventType, RoomID
+        recovery = Recovery()
+        task_id, team = identity["task_id"], identity["team_id"]
+        saved = await asyncio.to_thread(recovery.save_reply, task_id, team, text_content)
+        cp = saved["execution"]["checkpoint"]
+        result = await self._client.send_message_event(RoomID(event.source.chat_id), EventType.ROOM_MESSAGE,
+            {"msgtype": "m.text", "body": text_content, "org.agentteams.progress_only": True}, txn_id=cp["reply_txn"])
+        await asyncio.to_thread(recovery.delivered, task_id, team, str(result))
+        record_delivery(types.SimpleNamespace(success=True, message_id=str(result)))
 
     async def _on_room_message(self, event):
+        await self._recovery_admission.wait()
         content = getattr(event, "content", None)
         content = content if isinstance(content, dict) else content.serialize() if hasattr(content, "serialize") else {}
         if "org.agentteams.coordination" not in content and content.get("org.agentteams.progress_only") is not True:
@@ -131,6 +204,11 @@ class MatrixAdapter(_NativeMatrixAdapter):
         except (ImportError, ValueError):
             return
         if not await self._is_allowed_matrix_room_event(str(event.room_id)) or self._is_duplicate_event(str(event.event_id)):
+            return
+        from task_recovery import enabled
+        canonical = packet["meta"]["teamharness_coordination"]
+        if canonical["kind"] == "task_assigned" and enabled():
+            await self._recover_tasks(canonical["task_id"])
             return
         # The receipt admits the Leader's self-addressed closure without
         # weakening the native own-echo policy for ordinary messages.
@@ -169,7 +247,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
         })
 
     async def _process_message_background(self, event, session_key):
-        if "org.agentteams.coordination" in (event.raw_message or {}):
+        if "org.agentteams.coordination" in (event.raw_message or {}) or getattr(event, "_agentteams_recovery", None):
             token = _coordination_turn.set(True)
             try:
                 return await super()._process_message_background(event, session_key)
@@ -245,6 +323,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         trace_event("startup.stage", stage="matrix.connect")
+        if not is_reconnect:
+            self._recovery_admission.clear()
         try:
             ok = await super().connect(is_reconnect=is_reconnect)
         except Exception as exc:
@@ -252,6 +332,9 @@ class MatrixAdapter(_NativeMatrixAdapter):
             raise
         if ok and self._client is not None:
             self._wrap_send_message_event()
+            if not is_reconnect:
+                await self._recover_tasks()
+            self._recovery_admission.set()
             trace_event("runtime.ready", evidence="native_matrix_connect")
             if os.getenv("AGENTTEAMS_CONTROLLER_URL"):
                 reporter = await asyncio.create_subprocess_exec(

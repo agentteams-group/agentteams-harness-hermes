@@ -33,6 +33,7 @@ jobs:
       - run: make smoke VERSION=ci
       - run: make direct-control-smoke VERSION=ci
       - run: make native-coordination-smoke VERSION=ci
+      - run: make native-recovery-smoke VERSION=ci
       - name: Upgrade an existing v0.22.7 Worker
         run: python3 tests/upgrade_e2e.py --new-image ghcr.io/agentteams-group/agentteams-harness-hermes:ci
       - uses: actions/upload-artifact@v4

@@ -27,3 +27,6 @@ direct-control-smoke:
 # Run the installed SDK admission boundary without a model or external service.
 native-coordination-smoke:
 	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_coordination_smoke.py
+
+native-recovery-smoke:
+	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_recovery_smoke.py
