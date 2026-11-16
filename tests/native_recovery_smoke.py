@@ -66,10 +66,11 @@ async def check(workspace):
         assert adapter._client.send_message_event.call_args.kwargs["txn_id"] == "stable-reply"
         recovery.delivered.assert_called_once_with("stable-task", "team", "$sent")
         adapter._client.send_message_event.reset_mock()
-        recovery.save_reply.return_value = {"execution": {"checkpoint": cp}}
+        recovery.prepare_reply.return_value = ({"execution": {"checkpoint": cp}}, "Saved authoritative answer")
         recorded = Mock()
         await adapter._send_final_text(event, adapter._event_session_key(event), "Final answer", {}, False, 0, recorded)
-        recovery.save_reply.assert_called_once_with("stable-task", "team", "Final answer")
+        recovery.prepare_reply.assert_called_once_with("stable-task", "team", "Final answer")
+        assert adapter._client.send_message_event.call_args.args[2]["body"] == "Saved authoritative answer"
         assert adapter._client.send_message_event.call_args.kwargs["txn_id"] == "stable-reply"
         assert recorded.call_args.args[0].success is True
         # A delivered progress turn does not complete the authoritative Task.

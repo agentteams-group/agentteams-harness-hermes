@@ -187,8 +187,11 @@ class MatrixAdapter(_NativeMatrixAdapter):
         from mautrix.types import EventType, RoomID
         recovery = Recovery()
         task_id, team = identity["task_id"], identity["team_id"]
-        saved = await asyncio.to_thread(recovery.save_reply, task_id, team, text_content)
+        saved, text_content = await asyncio.to_thread(recovery.prepare_reply, task_id, team, text_content)
         cp = saved["execution"]["checkpoint"]
+        if cp.get("delivery") == "delivered":
+            record_delivery(types.SimpleNamespace(success=True, message_id=cp["reply_event"]))
+            return
         result = await self._client.send_message_event(RoomID(event.source.chat_id), EventType.ROOM_MESSAGE,
             {"msgtype": "m.text", "body": text_content, "org.agentteams.progress_only": True}, txn_id=cp["reply_txn"])
         await asyncio.to_thread(recovery.delivered, task_id, team, str(result))

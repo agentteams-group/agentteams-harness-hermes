@@ -116,9 +116,9 @@ def _mc(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     if not mc_bin:
         raise RuntimeError("mc binary not found on PATH. Please install mc first.")
     cmd = [mc_bin, *args]
-    logger.info("mc cmd: %s", " ".join(cmd))
+    logger.info("mc command: %s", args[0] if args else "")
     result = subprocess.run(cmd, capture_output=True, text=True, check=check)
-    logger.info("mc stdout (%d chars): %r", len(result.stdout), result.stdout[:200])
+    logger.info("mc stdout returned %d chars", len(result.stdout))
     if result.stderr:
         logger.info("mc stderr: %r", result.stderr[:200])
     return result
