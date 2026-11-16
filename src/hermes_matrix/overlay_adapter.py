@@ -18,6 +18,7 @@ import logging
 import asyncio
 import os
 import types
+from contextvars import ContextVar
 from typing import Any, Dict, Optional
 
 from gateway.config import PlatformConfig
@@ -32,6 +33,7 @@ from hermes_matrix.policies import (
 )
 
 logger = logging.getLogger(__name__)
+_coordination_turn = ContextVar("agentteams_task_notification", default=False)
 try:
     from runtime_observability import event as trace_event
 except ImportError:
@@ -118,6 +120,26 @@ class MatrixAdapter(_NativeMatrixAdapter):
         self._direct_runs: dict[str, dict] = {}
         self._dashboard_approvals = MatrixApprovals(self._send_dashboard_approval)
 
+    async def _on_room_message(self, event):
+        content = getattr(event, "content", None)
+        content = content if isinstance(content, dict) else content.serialize() if hasattr(content, "serialize") else {}
+        if "org.agentteams.coordination" not in content and content.get("org.agentteams.progress_only") is not True:
+            return await super()._on_room_message(event)
+        try:
+            from task_coordination import notification
+            packet = await asyncio.to_thread(notification, content, str(event.room_id), str(event.sender), str(self._user_id))
+        except (ImportError, ValueError):
+            return
+        if not await self._is_allowed_matrix_room_event(str(event.room_id)) or self._is_duplicate_event(str(event.event_id)):
+            return
+        # The receipt admits the Leader's self-addressed closure without
+        # weakening the native own-echo policy for ordinary messages.
+        source = self.build_source(chat_id=str(event.room_id), chat_type="group",
+            user_id=str(event.sender), thread_id=packet["session_id"])
+        from gateway.platforms.event import MessageEvent
+        await self.handle_message(MessageEvent(text=packet["text"], source=source,
+            message_id=str(event.event_id), raw_message=content))
+
     async def _direct_member(self, event) -> bool:
         if not event.source or not event.message_id or not self._client:
             return False
@@ -145,6 +167,12 @@ class MatrixAdapter(_NativeMatrixAdapter):
         })
 
     async def _process_message_background(self, event, session_key):
+        if "org.agentteams.coordination" in (event.raw_message or {}):
+            token = _coordination_turn.set(True)
+            try:
+                return await super()._process_message_background(event, session_key)
+            finally:
+                _coordination_turn.reset(token)
         if not await self._direct_member(event):
             return await super()._process_message_background(event, session_key)
         room = event.source.chat_id
@@ -258,6 +286,12 @@ class MatrixAdapter(_NativeMatrixAdapter):
         ) -> Any:
             if isinstance(content, dict):
                 apply_outbound_mentions(content, self_user_id=self._user_id)
+                if _coordination_turn.get():
+                    content["org.agentteams.progress_only"] = True
+                    content["m.mentions"] = {"user_ids": []}
+                    if isinstance(content.get("m.new_content"), dict):
+                        content["m.new_content"]["org.agentteams.progress_only"] = True
+                        content["m.new_content"]["m.mentions"] = {"user_ids": []}
                 if self._session_receipts and str(event_type) == "m.room.message":
                     request = lambda *args: matrix_request(*credentials(self._session_receipts.workspace))(*args)
                     content = await asyncio.to_thread(capture_audience, request, str(room_id), content)
