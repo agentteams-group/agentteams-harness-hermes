@@ -160,7 +160,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
             # source event or a migrated foreign native session.
             event = MessageEvent(text=recovery.resume_text({**task, "team_id": team, "spec": claimed["spec"]}),
                 source=self.build_source(chat_id=room, chat_type="group", user_id=str(self._user_id)),
-                message_id="recovery:"+team+"/"+task_id+":"+str(task["execution"]["generation"]), raw_message={})
+                message_id="recovery:"+team+"/"+task_id+":"+str(task["execution"]["generation"]), raw_message={},
+                internal=True, allow_gateway_control=False)
             event._agentteams_recovery = {"task_id": task_id, "team_id": team, "generation": task["execution"]["generation"]}
             await self.handle_message(event)
             if not getattr(event, "_gateway_accepted", False):

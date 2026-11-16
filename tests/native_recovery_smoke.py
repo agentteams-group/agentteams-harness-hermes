@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from gateway.config import PlatformConfig
+from gateway.run import GatewayRunner
 from hermes_matrix.overlay_adapter import MatrixAdapter
 
 
@@ -38,6 +39,21 @@ async def check(workspace):
         event = observed[0]
         assert event.text == "Resume step two from checkpoint three"
         assert event._agentteams_recovery["task_id"] == "stable-task"
+        assert event.internal is True
+        assert event.allow_gateway_control is False
+        # Exercise the actual downstream SDK authorization gate. Adapter queue
+        # acceptance alone previously hid a rejection of our own Matrix ID.
+        runner = GatewayRunner.__new__(GatewayRunner)
+        runner.config = SimpleNamespace(multiplex_profiles=False)
+        runner._is_user_authorized_for_source = Mock(return_value=False)
+        runner._scale_to_zero_note_real_inbound = Mock()
+        runner._hm_pre_gateway_dispatch_hook = AsyncMock(return_value=event)
+        assert await runner._hm_admit_event(event) == (event, event.source, True)
+        runner._is_user_authorized_for_source.assert_not_called()
+        event.internal = False
+        assert await runner._hm_admit_event(event) is None
+        runner._is_user_authorized_for_source.assert_called_once()
+        event.internal = True
         assert event.source.thread_id is None  # No forged Matrix thread/event.
         assert "stable-task:2" in adapter._event_session_key(event)
         adapter._client.send_message_event.assert_not_called()
