@@ -15,6 +15,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Read shared Core dependency
+        id: core
+        run: echo "ref=$(sed -n 's/^AT_REF=//p' versions.env)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: agentscope-ai/AgentTeams
+          ref: ${{ steps.core.outputs.ref }}
+          path: .deps/AgentTeams
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'

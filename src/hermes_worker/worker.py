@@ -38,6 +38,7 @@ from hermes_worker.bridge import (
 )
 from hermes_worker.config import WorkerConfig
 from hermes_worker.sync import FileSync, push_loop, sync_loop
+from agentteams_skill_warnings import check_skill, report_warnings
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -364,27 +365,39 @@ class Worker:
         skills_dir = self._hermes_home / "skills"
         skills_dir.mkdir(parents=True, exist_ok=True)
 
-        skill_names = self.sync.list_skills()
+        try:
+            skill_names = self.sync.list_skills()
+        except Exception as exc:
+            report_warnings([f"Skill sync failed ({type(exc).__name__})"])
+            return
         if not skill_names:
             logger.info("No skills published in MinIO for %s", self.worker_name)
 
         installed: list[str] = []
+        warnings: list[str] = []
         for name in skill_names:
             src_dir = self.sync.local_dir / "skills" / name
             dst_dir = skills_dir / name
-            if not src_dir.exists():
-                continue
-            dst_dir.mkdir(parents=True, exist_ok=True)
-            for src_file in src_dir.rglob("*"):
-                if not src_file.is_file():
-                    continue
-                rel = src_file.relative_to(src_dir)
-                dst_file = dst_dir / rel
-                dst_file.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src_file, dst_file)
-                if dst_file.suffix == ".sh":
-                    dst_file.chmod(dst_file.stat().st_mode | 0o111)
-            installed.append(name)
+            try:
+                if name in {".", ".."} or "/" in name or "\\" in name:
+                    raise ValueError("invalid skill name")
+                if not src_dir.resolve().is_relative_to((self.sync.local_dir / "skills").resolve()):
+                    raise ValueError("skill path escapes workspace")
+                check_skill(src_dir)
+                dst_dir.mkdir(parents=True, exist_ok=True)
+                for src_file in src_dir.rglob("*"):
+                    if not src_file.is_file():
+                        continue
+                    rel = src_file.relative_to(src_dir)
+                    dst_file = dst_dir / rel
+                    dst_file.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src_file, dst_file)
+                    if dst_file.suffix == ".sh":
+                        dst_file.chmod(dst_file.stat().st_mode | 0o111)
+                installed.append(name)
+            except Exception as exc:
+                warnings.append(f"Skill {name}: load failed ({type(exc).__name__})")
+        report_warnings(warnings)
 
         if installed:
             console.print(f"[green]Skills installed: {', '.join(installed)}[/green]")
