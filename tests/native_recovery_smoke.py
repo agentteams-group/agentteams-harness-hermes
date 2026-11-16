@@ -41,7 +41,7 @@ async def check(workspace):
     adapter._message_handler = MethodType(admit, runner)
     adapter.handle_message = adapter._message_handler
     with patch("task_recovery.enabled", return_value=True), patch("task_recovery.Recovery", return_value=recovery):
-        await adapter._recover_tasks()
+        await asyncio.gather(adapter._recover_tasks(), adapter._recover_tasks())
         assert len(observed) == 1
         event = observed[0]
         assert event.text == "Resume step two from checkpoint three"

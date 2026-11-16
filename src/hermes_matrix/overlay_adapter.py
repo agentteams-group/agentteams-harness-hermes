@@ -122,6 +122,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
         self._direct_runs: dict[str, dict] = {}
         self._dashboard_approvals = MatrixApprovals(self._send_dashboard_approval)
         self._recovered_admissions = set()
+        self._task_recovery_lock = asyncio.Lock()
 
     async def _recover_tasks(self, only_task=None, *, claim_only=False, source_event=None):
         if not os.getenv("AGENTTEAMS_CONTROLLER_URL") or not os.getenv("AGENTTEAMS_PROCESS_ID"):
@@ -129,6 +130,11 @@ class MatrixAdapter(_NativeMatrixAdapter):
         from task_recovery import Recovery, enabled
         if not enabled():
             return
+        async with self._task_recovery_lock:
+            await self._recover_tasks_serial(only_task, claim_only=claim_only, source_event=source_event)
+
+    async def _recover_tasks_serial(self, only_task, *, claim_only, source_event):
+        from task_recovery import Recovery
         recovery = Recovery()
         snapshot = await asyncio.to_thread(recovery.discover)
         from gateway.platforms.event import MessageEvent
