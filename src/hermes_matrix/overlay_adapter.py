@@ -124,6 +124,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
         self._recovered_admissions = set()
 
     async def _recover_tasks(self, only_task=None, *, claim_only=False):
+        if not os.getenv("AGENTTEAMS_CONTROLLER_URL") or not os.getenv("AGENTTEAMS_PROCESS_ID"):
+            return
         from task_recovery import Recovery, enabled
         if not enabled():
             return
