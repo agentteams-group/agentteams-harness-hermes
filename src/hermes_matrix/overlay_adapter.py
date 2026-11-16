@@ -163,19 +163,25 @@ class MatrixAdapter(_NativeMatrixAdapter):
                 message_id="recovery:"+team+"/"+task_id+":"+str(task["execution"]["generation"]), raw_message={},
                 internal=True, allow_gateway_control=False)
             event._agentteams_recovery = {"task_id": task_id, "team_id": team, "generation": task["execution"]["generation"]}
+            runner = getattr(self._message_handler, "__self__", None)
+            if runner is None or getattr(runner, "session_store", None) is None:
+                raise RuntimeError("native Hermes session store is unavailable for Task recovery")
+            session_key = runner._session_key_for_source(event.source)
+            if runner._is_session_running(session_key) or session_key in self._active_sessions:
+                raise RuntimeError("native Hermes session is busy; Task recovery must wait")
+            # Adapter queue keys do not select the SDK's conversation. Use its
+            # real session transition API so old room history cannot supersede
+            # this Task's shared checkpoint. Valid-session reuse is still open.
+            session = await asyncio.to_thread(runner.session_store.get_or_create_session,
+                event.source, force_new=True, touch_activity=False)
+            event._agentteams_recovery["session_id"] = session.session_id
+            trace_event("task.recovery.session", task_id=task_id, team_id=team,
+                generation=task["execution"]["generation"], session_id=session.session_id,
+                checkpoint_version=cp.get("version", 0))
             await self.handle_message(event)
             if not getattr(event, "_gateway_accepted", False):
                 raise RuntimeError("native Hermes gateway did not admit recovered Task")
             self._recovered_admissions.add(admission)
-
-    def _event_session_key(self, event):
-        identity = getattr(event, "_agentteams_recovery", None)
-        if identity:
-            # A fresh native lane per verified process generation is the
-            # conservative first implementation. Valid-session reuse still
-            # needs checkpoint-consistent native persistence acceptance.
-            return super()._event_session_key(event)+":recovery:"+identity["team_id"]+"/"+identity["task_id"]+":"+str(identity["generation"])
-        return super()._event_session_key(event)
 
     async def _send_final_text(self, event, session_key, text_content, metadata,
                                is_ephemeral_response, ephemeral_ttl, record_delivery):
