@@ -92,7 +92,7 @@ def run(args) -> None:
     network, storage = prefix + "-net", prefix + "-storage"
     created_network = created_storage = False
     try:
-        docker("network", "create", network)
+        docker("network", "create", *(["--subnet", args.subnet] if args.subnet else []), network)
         created_network = True
         docker("run", "-d", "--name", storage, "--network", network, "--tmpfs", "/data",
                "-e", "MINIO_ROOT_USER=storage-smoke", "-e", "MINIO_ROOT_PASSWORD=storage-smoke-only",
@@ -116,6 +116,7 @@ if __name__ == "__main__":
     parser.add_argument("--image", default="ghcr.io/agentteams-group/agentteams-harness-hermes:ci")
     parser.add_argument("--storage-image", default="higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/minio:20260216")
     parser.add_argument("--endpoint")
+    parser.add_argument("--subnet", help="Optional isolated test subnet when local Docker pools are exhausted")
     parser.add_argument("--generation", type=int, choices=(1, 2))
     options = parser.parse_args()
     if options.endpoint:
