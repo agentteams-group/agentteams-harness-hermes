@@ -62,7 +62,13 @@ def install_native_input_guard():
 
     @wraps(original)
     def guarded(agent, **kwargs):
+        from hermes_matrix.message_execution import ordinary_turn
+        turn = ordinary_turn.get()
+        if turn:
+            turn.matrix.message_current(turn.identity)
         commit_input(agent, kwargs["messages"], kwargs["conversation_history"])
+        if turn:
+            turn.remember_input(agent)
         return original(agent, **kwargs)
 
     guarded._agentteams_input_guard = True

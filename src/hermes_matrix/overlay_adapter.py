@@ -129,16 +129,16 @@ class MatrixAdapter(_NativeMatrixAdapter):
             from hermes_matrix.input_commit import install_native_input_guard
             install_native_input_guard()
 
-    async def _recover_tasks(self, only_task=None, *, claim_only=False, source_event=None):
+    async def _recover_tasks(self, only_task=None, *, only_team=None, claim_only=False, source_event=None):
         if not os.getenv("AGENTTEAMS_CONTROLLER_URL") or not os.getenv("AGENTTEAMS_PROCESS_ID"):
             return
         from task_recovery import Recovery, enabled
         if not enabled():
             return
         async with self._task_recovery_lock:
-            await self._recover_tasks_serial(only_task, claim_only=claim_only, source_event=source_event)
+            await self._recover_tasks_serial(only_task, only_team=only_team, claim_only=claim_only, source_event=source_event)
 
-    async def _recover_tasks_serial(self, only_task, *, claim_only, source_event):
+    async def _recover_tasks_serial(self, only_task, *, only_team, claim_only, source_event):
         from task_recovery import Recovery, RecoveryConflict
         from worker_matrix_state import WorkerMatrix
         from worker_sessions import WorkerSessions
@@ -152,6 +152,10 @@ class MatrixAdapter(_NativeMatrixAdapter):
         for entry in snapshot["tasks"]:
             task_id, team = entry["task"]["task_id"], entry["team_id"]
             if only_task is not None and task_id != only_task:
+                continue
+            if only_team is not None and team != only_team:
+                continue
+            if source_event and entry["task"].get("room_id") != str(source_event.room_id):
                 continue
             claimed = await asyncio.to_thread(recovery.claim, snapshot, entry)
             if claim_only:
@@ -267,6 +271,12 @@ class MatrixAdapter(_NativeMatrixAdapter):
 
     async def _send_final_text(self, event, session_key, text_content, metadata,
                                is_ephemeral_response, ephemeral_ttl, record_delivery):
+        ordinary = getattr(event, "_agentteams_message", None)
+        if ordinary:
+            saved = await asyncio.to_thread(ordinary.matrix.message_save_reply, ordinary.identity, text_content)
+            reply_id = await self._pending_matrix.deliver(saved)
+            record_delivery(types.SimpleNamespace(success=True, message_id=reply_id))
+            return
         identity = getattr(event, "_agentteams_recovery", None)
         if not identity:
             return await super()._send_final_text(event, session_key, text_content, metadata,
@@ -386,6 +396,18 @@ class MatrixAdapter(_NativeMatrixAdapter):
         })
 
     async def _process_message_background(self, event, session_key):
+        ordinary = getattr(event, "_agentteams_message", None)
+        if not ordinary:
+            return await self._process_managed_message(event, session_key)
+        from hermes_matrix.message_execution import ordinary_turn
+        scope = ordinary_turn.set(ordinary)
+        try:
+            return await self._process_managed_message(event, session_key)
+        finally:
+            ordinary_turn.reset(scope)
+            self._pending_matrix.running.discard(ordinary.identity["event_key"])
+
+    async def _process_managed_message(self, event, session_key):
         if "org.agentteams.coordination" in (event.raw_message or {}) or getattr(event, "_agentteams_recovery", None):
             token = _coordination_turn.set(True)
             try:
@@ -413,6 +435,14 @@ class MatrixAdapter(_NativeMatrixAdapter):
             await self._execution_status(run, "stopped" if run["stopped"] else status)
 
     async def handle_message(self, event):
+        if getattr(self, "_pending_matrix", None) is not None and not getattr(event, "_agentteams_message", None):
+            from hermes_matrix.sync_state import current_admission
+            from worker_matrix_state import matrix_event_key
+            admission = current_admission()
+            item = admission.item if admission is not None else None
+            if item and item["intent"] == "message" and item["event_id"] == event.message_id:
+                self._pending_matrix.live[matrix_event_key(item["room_id"], event.message_id)] = event
+                return
         raw = event.raw_message
         control = raw.get("com.agentteams.control") if isinstance(raw, dict) else None
         if not isinstance(raw, dict) or "com.agentteams.control" not in raw:
@@ -467,7 +497,13 @@ class MatrixAdapter(_NativeMatrixAdapter):
         if not enabled():
             return await super()._connect_initial_sync(client)
         from hermes_matrix.sync_state import NativeSync
+        from hermes_matrix.message_execution import PendingInputs, install_ordinary_guard
+        install_ordinary_guard()
         self._shared_sync = NativeSync(self, client)
+        self._pending_matrix = PendingInputs(self, self._shared_sync.matrix)
+        self._pending_matrix_ready = False
+        # Each source event has its own execution and reply transaction.
+        self._text_batch_delay_seconds = 0
         self._shared_sync.install()
         # The shared timeline cursor includes messages received while offline.
         # The SDK's five-second startup cutoff would discard those messages.
@@ -485,7 +521,10 @@ class MatrixAdapter(_NativeMatrixAdapter):
         if shared is None:
             return await super()._absorb_sync(client, sync_data, initial=initial)
         native = super()._absorb_sync
-        return await shared.absorb(sync_data, lambda data: native(client, data, initial=initial))
+        cursor = await shared.absorb(sync_data, lambda data: native(client, data, initial=initial))
+        if getattr(self, "_pending_matrix_ready", False):
+            await self._pending_matrix.drain()
+        return cursor
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         trace_event("startup.stage", stage="matrix.connect")
@@ -501,6 +540,9 @@ class MatrixAdapter(_NativeMatrixAdapter):
         if ok and self._client is not None:
             self._wrap_send_message_event()
             await self._recover_tasks()
+            if getattr(self, "_pending_matrix", None) is not None:
+                self._pending_matrix_ready = True
+                await self._pending_matrix.drain()
             trace_event("runtime.ready", evidence="native_matrix_connect")
             if os.getenv("AGENTTEAMS_CONTROLLER_URL"):
                 reporter = await asyncio.create_subprocess_exec(

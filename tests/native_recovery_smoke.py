@@ -175,7 +175,7 @@ async def check(workspace):
         assert len(observed) == before
         task["status"] = "in_progress"
         task["execution"]["generation"] += 1
-        await adapter._recover_tasks("stable-task", source_event=SimpleNamespace(event_id="$assignment", sender="@leader:test"))
+        await adapter._recover_tasks("stable-task", source_event=SimpleNamespace(event_id="$assignment", sender="@leader:test", room_id=task["room_id"]))
         event = observed[-1]
         assert event.message_id == "$assignment" and event.source.user_id == "@leader:test"
         key = adapter._event_session_key(event)
