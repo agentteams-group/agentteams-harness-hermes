@@ -512,6 +512,10 @@ def bridge_openclaw_to_hermes(
         if not isinstance(auxiliary_vision, dict):
             auxiliary_vision = {}
         auxiliary["vision"] = {**auxiliary_vision, **auxiliary_vision_block}
+    elif worker_model is not None:
+        # A text-only Worker model must not retain the previous model's
+        # bridge-owned vision endpoint or secret in the native projection.
+        existing_yaml.get("auxiliary", {}).pop("vision", None)
 
     logging_block = _logging_yaml_block()
     if logging_block:
