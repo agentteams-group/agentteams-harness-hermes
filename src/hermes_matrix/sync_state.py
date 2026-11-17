@@ -1,5 +1,6 @@
 """Commit admitted timeline inputs in Matrix order before releasing native work."""
 import asyncio
+import logging
 from contextvars import ContextVar
 
 from mautrix.client.syncer import SyncStream
@@ -157,6 +158,10 @@ class NativeSync:
                 await asyncio.gather(*self.dispatch_event(event, source))
             await self.client.sync_store.put_next_batch(data["next_batch"])
             self.initialized = True
+            if any(room.get("gaps") for room in saved["state"]["rooms"].values()):
+                from hermes_matrix.sync_history import recover_history
+                for room_id, failure in (await recover_history(self)).items():
+                    logging.getLogger(__name__).warning("Matrix history pending in %s: %s", room_id, failure)
             return data["next_batch"]
         except BaseException as error:
             self.error = error
