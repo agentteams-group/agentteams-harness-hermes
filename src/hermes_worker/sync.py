@@ -32,6 +32,7 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -379,15 +380,34 @@ class FileSync:
         return f"{_MC_ALIAS}/{self.bucket}/shared/"
 
     def get_config(self) -> dict[str, Any]:
-        """Pull openclaw.json and return parsed dict."""
+        """Load Worker transport authority, with an older-Controller fallback."""
+        runtime_text = self._cat(f"{self._prefix}/runtime/runtime.yaml")
+        runtime = (yaml.safe_load(runtime_text) or {}) if runtime_text else {}
+        transport = runtime.get("matrix", {}).get("transport")
+        if transport is not None and runtime.get("member", {}).get("runtime") == "hermes":
+            member = runtime["member"]
+            token_env = runtime.get("credentials", {}).get("matrixTokenEnv", "AGENTTEAMS_WORKER_MATRIX_TOKEN")
+            token = os.getenv(token_env, "").strip() or str(runtime.get("matrix", {}).get("accessToken") or "").strip()
+            if not token:
+                raise ValueError("Worker Matrix credential binding is unavailable")
+            if not transport.get("homeserver") or not member.get("matrixUserId"):
+                raise ValueError("Worker Matrix homeserver and identity are required")
+            matrix = {**transport, "userId": member["matrixUserId"], "accessToken": token,
+                      "homeRoomId": member.get("personalRoomId", "")}
+            # The bridge must consume the exact standard snapshot just read,
+            # rather than a previous generation left by a native mirror.
+            path = self.local_dir / "runtime/runtime.yaml"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as pending:
+                pending.write(runtime_text)
+            os.replace(pending.name, path)
+            return {"channels": {"matrix": matrix}}
         text = self._cat(f"{self._prefix}/openclaw.json")
         if not text:
             raise RuntimeError(
                 f"openclaw.json not found in MinIO for worker {self.worker_name}"
             )
-        logger.info(
-            "openclaw.json raw content (%d chars): %r", len(text), text[:500]
-        )
+        logger.info("Loaded Worker compatibility configuration (%d chars)", len(text))
         return json.loads(text)
 
     def get_soul(self) -> Optional[str]:

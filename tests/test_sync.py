@@ -5,9 +5,75 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import pytest
+import yaml
 
 from hermes_worker import sync as sync_module
 from hermes_worker.sync import FileSync, push_local
+
+
+def test_standard_worker_record_loads_without_compatibility_or_native_config(tmp_path, monkeypatch):
+    sync = FileSync(endpoint="http://minio:9000", access_key="test", secret_key="test",
+                    bucket="test", worker_name="worker", local_dir=tmp_path)
+    record = {
+        "member": {"runtime": "hermes", "runtimeName": "worker", "matrixUserId": "@worker:matrix.test",
+                   "personalRoomId": "!worker:matrix.test"},
+        "matrix": {"transport": {"homeserver": "https://matrix.test", "encryption": True,
+                    "dm": {"policy": "allowlist", "allowFrom": ["@admin:matrix.test"]},
+                    "groupPolicy": "allowlist", "groupAllowFrom": ["@leader:matrix.test"], "historyLimit": 24}},
+        "desired": {"model": {"model": "worker-model", "gatewayUrl": "https://gateway.test/v1"}},
+        "credentials": {"matrixTokenEnv": "WORKER_BOUND_MATRIX_TOKEN", "gatewayKeyEnv": "WORKER_BOUND_GATEWAY_KEY"},
+    }
+    monkeypatch.setenv("WORKER_BOUND_MATRIX_TOKEN", "scoped-test-token")
+    monkeypatch.setenv("WORKER_BOUND_GATEWAY_KEY", "scoped-model-test-key")
+    requested = []
+
+    def read(key):
+        requested.append(key)
+        return yaml.safe_dump(record) if key.endswith("/runtime/runtime.yaml") else None
+
+    monkeypatch.setattr(sync, "_cat", read)
+    config = sync.get_config()
+    matrix = config["channels"]["matrix"]
+    assert matrix["homeserver"] == "https://matrix.test"
+    assert matrix["userId"] == "@worker:matrix.test"
+    assert matrix["accessToken"] == "scoped-test-token"
+    assert matrix["homeRoomId"] == "!worker:matrix.test"
+    assert matrix["groupAllowFrom"] == ["@leader:matrix.test"]
+    assert matrix["historyLimit"] == 24
+    assert yaml.safe_load((tmp_path / "runtime/runtime.yaml").read_text()) == record
+    assert not any(key.endswith("openclaw.json") for key in requested)
+    assert not (tmp_path / ".hermes").exists()
+    from hermes_worker.bridge import bridge_openclaw_to_hermes
+    bridge_openclaw_to_hermes(config, tmp_path / ".hermes")
+    native = yaml.safe_load((tmp_path / ".hermes/config.yaml").read_text())
+    assert native["model"]["default"] == "worker-model"
+    environment = (tmp_path / ".hermes/.env").read_text()
+    assert "scoped-test-token" in environment and "scoped-model-test-key" in environment
+    assert "@leader:matrix.test" in environment
+
+
+def test_missing_standard_matrix_binding_cannot_fall_back_to_old_token(tmp_path, monkeypatch):
+    sync = FileSync(endpoint="http://minio:9000", access_key="test", secret_key="test",
+                    bucket="test", worker_name="worker", local_dir=tmp_path)
+    record = {"member": {"runtime": "hermes", "matrixUserId": "@worker:matrix.test"},
+              "matrix": {"transport": {"homeserver": "https://matrix.test"}},
+              "credentials": {"matrixTokenEnv": "WORKER_BOUND_MATRIX_TOKEN"}}
+    monkeypatch.delenv("WORKER_BOUND_MATRIX_TOKEN", raising=False)
+    monkeypatch.setattr(sync, "_cat", lambda key: yaml.safe_dump(record) if key.endswith("runtime.yaml")
+                        else '{"channels":{"matrix":{"accessToken":"old-token"}}}')
+    with pytest.raises(ValueError, match="credential"):
+        sync.get_config()
+
+
+def test_older_controller_keeps_compatibility_without_logging_credentials(tmp_path, monkeypatch, caplog):
+    sync = FileSync(endpoint="http://minio:9000", access_key="test", secret_key="test",
+                    bucket="test", worker_name="worker", local_dir=tmp_path)
+    compatibility = {"channels": {"matrix": {"accessToken": "legacy-secret-test-token"}}}
+    monkeypatch.setattr(sync, "_cat", lambda key: json.dumps(compatibility) if key.endswith("openclaw.json") else None)
+    with caplog.at_level("INFO"):
+        assert sync.get_config() == compatibility
+    assert "legacy-secret-test-token" not in caplog.text
 
 
 def test_projected_task_scope_wins_over_old_local_team_context(tmp_path):

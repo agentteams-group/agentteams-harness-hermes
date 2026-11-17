@@ -36,31 +36,27 @@ def main() -> None:
         os.environ["MATRIX_USER_ID"] = "@worker:matrix.invalid"
         os.environ["MATRIX_ALLOWED_USERS"] = "@alice:matrix.invalid"
         os.environ["WORKER_SMOKE_GATEWAY_KEY"] = "worker-scoped-smoke-key"
+        os.environ["WORKER_SMOKE_MATRIX_TOKEN"] = "worker-scoped-matrix-test-token"
         runtime = workspace / "runtime/runtime.yaml"
         runtime.parent.mkdir()
-        runtime.write_text(yaml.safe_dump({
-            "member": {"runtime": "hermes", "role": "worker"},
+        record = yaml.safe_dump({
+            "member": {"runtime": "hermes", "role": "worker", "runtimeName": "smoke-worker",
+                       "matrixUserId": "@worker:matrix.invalid", "personalRoomId": "!home:matrix.invalid"},
+            "matrix": {"transport": {"homeserver": "http://matrix.invalid:8008", "encryption": False,
+                "dm": {"policy": "allowlist", "allowFrom": ["@alice:matrix.invalid"]},
+                "groupPolicy": "allowlist", "groupAllowFrom": ["@alice:matrix.invalid"]}},
             "desired": {"model": {"model": "worker-model", "providerId": "agentteams-gateway",
-                "gatewayUrl": "http://worker-gateway.invalid/v1", "input": ["text"]}},
-            "credentials": {"gatewayKeyEnv": "WORKER_SMOKE_GATEWAY_KEY"},
-        }))
+                "gatewayUrl": "http://worker-gateway.invalid", "input": ["text"]}},
+            "credentials": {"gatewayKeyEnv": "WORKER_SMOKE_GATEWAY_KEY", "matrixTokenEnv": "WORKER_SMOKE_MATRIX_TOKEN"},
+        })
+        runtime.write_text(record)
 
         from hermes_worker.bridge import bridge_openclaw_to_hermes
         from hermes_worker.worker import Worker
+        from hermes_worker.sync import FileSync
 
-        compatibility = {
-            "channels": {"matrix": {
-                "homeserver": os.environ["MATRIX_HOMESERVER"],
-                "accessToken": os.environ["MATRIX_ACCESS_TOKEN"],
-                "userId": os.environ["MATRIX_USER_ID"],
-            }},
-            "models": {"providers": {"gw": {
-                "baseUrl": "http://gateway.invalid/v1",
-                "apiKey": "synthetic-smoke-key",
-                "models": [{"id": "test-model", "input": ["text"]}],
-            }}},
-            "agents": {"defaults": {"model": {"primary": "gw/test-model"}}},
-        }
+        sync = FileSync(endpoint="http://storage.invalid", access_key="fixture", secret_key="fixture",
+                        bucket="fixture", worker_name="smoke-worker", local_dir=workspace)
         for empty_native_directory in (False, True):
             if empty_native_directory:
                 shutil.rmtree(home)
@@ -72,13 +68,19 @@ def main() -> None:
                 }))
                 (home / ".env").write_text("OPENAI_API_KEY=old-native-key\n")
             shutil.copytree("/opt/agentteams/hermes-plugins", home / "plugins")
-            bridge_openclaw_to_hermes(compatibility, home)
+            # Exercise the startup loader without a compatibility file. Only
+            # the object-store read is a fixture; the bridge and SDK are real.
+            with patch.object(sync, "_cat", side_effect=lambda key: record if key.endswith("/runtime/runtime.yaml") else None):
+                projected = sync.get_config()
+            assert not (workspace / "openclaw.json").exists()
+            bridge_openclaw_to_hermes(projected, home)
             Worker._load_env_file(home / ".env")
             from hermes_cli.config import load_config
             effective = load_config()
             assert effective["model"]["default"] == "worker-model"
             assert effective["model"]["base_url"] == "http://worker-gateway.invalid/v1"
             assert os.environ["OPENAI_API_KEY"] == "worker-scoped-smoke-key"
+            assert os.environ["MATRIX_ACCESS_TOKEN"] == "worker-scoped-matrix-test-token"
             assert "old-native-key" not in (home / "config.yaml").read_text()
 
         from gateway.config import PlatformConfig, load_gateway_config

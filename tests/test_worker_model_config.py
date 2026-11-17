@@ -8,13 +8,14 @@ from hermes_worker.bridge import bridge_openclaw_to_hermes
 
 
 @pytest.mark.parametrize("model_input", [["text"], ["text", "image"]])
-def test_worker_model_rebuild_ignores_stale_compatibility_and_native_config(tmp_path, monkeypatch, model_input):
+@pytest.mark.parametrize("gateway_url", ["https://worker-gateway.test", "https://worker-gateway.test/v1", "https://worker-gateway.test/v1/"])
+def test_worker_model_rebuild_ignores_stale_compatibility_and_native_config(tmp_path, monkeypatch, model_input, gateway_url):
     runtime = tmp_path / "runtime/runtime.yaml"
     runtime.parent.mkdir()
     runtime.write_text(yaml.safe_dump({
         "member": {"runtime": "hermes", "role": "worker"},
         "desired": {"model": {"providerId": "agentteams-gateway", "model": "worker-model",
-                               "gatewayUrl": "https://worker-gateway.test/v1", "input": model_input}},
+                               "gatewayUrl": gateway_url, "input": model_input}},
         "credentials": {"gatewayKeyEnv": "WORKER_BOUND_GATEWAY_KEY"},
     }))
     monkeypatch.setenv("WORKER_BOUND_GATEWAY_KEY", "worker-bound-test-key")

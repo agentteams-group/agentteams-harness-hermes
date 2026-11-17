@@ -444,12 +444,15 @@ def bridge_openclaw_to_hermes(
             raise ValueError("Worker model credential binding is unavailable")
         if not worker_model.get("model") or not worker_model.get("gatewayUrl"):
             raise ValueError("Worker model and gateway URL are required")
+        gateway_url = worker_model["gatewayUrl"].rstrip("/")
+        if not gateway_url.endswith("/v1"):
+            gateway_url += "/v1"
         # The Worker record owns managed model settings. The compatibility
         # document and native files may still reflect a previous generation.
         openclaw_cfg = copy.deepcopy(openclaw_cfg)
         provider = worker_model.get("providerId") or "agentteams-gateway"
         openclaw_cfg["models"] = {"providers": {provider: {
-            "baseUrl": worker_model["gatewayUrl"], "apiKey": credential,
+            "baseUrl": gateway_url, "apiKey": credential,
             "models": [{"id": worker_model["model"], "input": worker_model.get("input", ["text"])}],
         }}}
         openclaw_cfg.setdefault("agents", {}).setdefault("defaults", {})["model"] = {
