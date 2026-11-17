@@ -103,7 +103,8 @@ class InputCommitSmoke(TestCase):
         self.factory.assert_not_called()
 
     def test_real_turn_commits_before_compaction_and_model_and_fact_failure_stops_both(self):
-        order, requests = [], []
+        order, requests, blocked_requests = [], [], []
+        requests_by_port = {}
         class Model(BaseHTTPRequestHandler):
             def log_message(self, *args):
                 pass
@@ -115,7 +116,7 @@ class InputCommitSmoke(TestCase):
                     self.send_response(404)
                     self.end_headers()
                     return
-                requests.append(payload)
+                requests_by_port[self.server.server_port].append(payload)
                 order.append("model")
                 if payload.get("stream"):
                     chunks = [{"id": "fixture", "object": "chat.completion.chunk", "created": 1,
@@ -140,9 +141,14 @@ class InputCommitSmoke(TestCase):
                 self.end_headers()
                 self.wfile.write(body)
         server = ThreadingHTTPServer(("127.0.0.1", 0), Model)
+        blocked_server = ThreadingHTTPServer(("127.0.0.1", 0), Model)
+        requests_by_port.update({server.server_port: requests, blocked_server.server_port: blocked_requests})
         threading.Thread(target=server.serve_forever, daemon=True).start()
+        threading.Thread(target=blocked_server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
+        self.addCleanup(blocked_server.server_close)
+        self.addCleanup(blocked_server.shutdown)
         native_compaction = turn_context_compaction.run_turn_start_compaction
         def compact(*args, **kwargs):
             order.append("compaction")
@@ -165,15 +171,17 @@ class InputCommitSmoke(TestCase):
             self.assertLess(order.index("fact"), order.index("compaction"))
             self.assertLess(order.index("fact"), order.index("model"), repr(requests))
             order.clear()
-            requests.clear()
             self.matrix.native_committed.side_effect = RecoveryUnavailable("current start/CAS unavailable")
-            blocked = self.agent(f"http://127.0.0.1:{server.server_port}/v1")
+            # A successful turn can still title its session asynchronously.
+            # A separate endpoint proves that the failed turn sends nothing,
+            # including auxiliary calls, without counting that earlier work.
+            blocked = self.agent(f"http://127.0.0.1:{blocked_server.server_port}/v1")
             blocked.session_id = "blocked-native"
             try:
                 result = blocked.run_conversation("Do not infer before persistence", persist_user_platform_id="$source")
             except RecoveryUnavailable:
                 result = {"failed": True}
-            self.assertFalse(requests)
+            self.assertFalse(blocked_requests)
             self.assertNotIn("compaction", order)
             self.assertNotEqual(result.get("final_response"), "NATIVE_GUARD_OK")
 
