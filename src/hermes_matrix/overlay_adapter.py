@@ -543,6 +543,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
             if getattr(self, "_pending_matrix", None) is not None:
                 self._pending_matrix_ready = True
                 await self._pending_matrix.drain()
+                from worker_handoff import recovery_scanned
+                recovery_scanned()
             trace_event("runtime.ready", evidence="native_matrix_connect")
             if os.getenv("AGENTTEAMS_CONTROLLER_URL"):
                 reporter = await asyncio.create_subprocess_exec(
