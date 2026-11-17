@@ -1,0 +1,33 @@
+{
+  "passed": true,
+  "scope": "Standard Worker transport/model record through startup config loader, bridge and installed Hermes SDK in a local ARM64 overlay",
+  "core_source": "598ed0207cc96923d6aa599b6db2f3e49438f7a6",
+  "hermes_runtime_source": "678bc2055f25be840d121a23893c46cef59b0a38",
+  "sdk_tag": "v0.23.0",
+  "sdk_commit": "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19",
+  "image": "recovery-1631/hermes:local-20261117084204",
+  "image_id": "sha256:48055f6fcaab65f944c260a02eea02db0ba40aa157eefea9afb0cb2f407a4fe0",
+  "driver_sha256": "93c191f6ae8226eb5958a0f30d31df0692270fe2a9d86c20381fd25fa92733db",
+  "network": "none",
+  "storage": "Worker standard object read is a fixture; no openclaw.json compatibility object is supplied",
+  "native_sdk": "Actual hermes_cli.config.load_config() reads the generated native files",
+  "scenarios": [
+    "stale private config overwritten",
+    "entire private directory deleted and reconstructed"
+  ],
+  "assertions": [
+    "Worker model and normalized /v1 gateway endpoint",
+    "Worker-bound Matrix token and model key",
+    "Matrix identity/policy loaded from standard record without compatibility object",
+    "no old vision secret"
+  ],
+  "matrix_transport": "Reconnect and send use mocks, not a real Matrix server",
+  "model_calls": 0,
+  "task_execution_tested": false,
+  "full_worker_startup_tested": false,
+  "limits": [
+    "Only the managed-model/transport path is accepted by this configuration check",
+    "No-managed-model compatibility preservation is covered by host regressions and needs final-head hosted CI",
+    "Actual storage, real Matrix, process recovery and six-Harness execution matrix remain open"
+  ]
+}

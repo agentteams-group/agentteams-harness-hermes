@@ -76,6 +76,20 @@ def test_older_controller_keeps_compatibility_without_logging_credentials(tmp_pa
     assert "legacy-secret-test-token" not in caplog.text
 
 
+def test_standard_transport_retains_legacy_model_when_no_managed_model_is_declared(tmp_path, monkeypatch):
+    sync = FileSync(endpoint="http://minio:9000", access_key="test", secret_key="test",
+                    bucket="test", worker_name="worker", local_dir=tmp_path)
+    record = {"member": {"runtime": "hermes", "matrixUserId": "@worker:matrix.test"},
+              "matrix": {"transport": {"homeserver": "https://matrix.test"}},
+              "credentials": {"matrixTokenEnv": "WORKER_BOUND_MATRIX_TOKEN"}}
+    compatibility = {"models": {"providers": {"gateway": {"models": [{"id": "default-model"}]}}}}
+    monkeypatch.setenv("WORKER_BOUND_MATRIX_TOKEN", "new-test-token")
+    monkeypatch.setattr(sync, "_cat", lambda key: yaml.safe_dump(record) if key.endswith("runtime.yaml") else json.dumps(compatibility))
+    config = sync.get_config()
+    assert config["models"] == compatibility["models"]
+    assert config["channels"]["matrix"]["accessToken"] == "new-test-token"
+
+
 def test_projected_task_scope_wins_over_old_local_team_context(tmp_path):
     sync = FileSync(endpoint="http://minio:9000", access_key="test", secret_key="test",
                     bucket="test", worker_name="worker", local_dir=tmp_path)

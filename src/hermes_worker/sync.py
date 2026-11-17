@@ -394,6 +394,14 @@ class FileSync:
                 raise ValueError("Worker Matrix homeserver and identity are required")
             matrix = {**transport, "userId": member["matrixUserId"], "accessToken": token,
                       "homeRoomId": member.get("personalRoomId", "")}
+            projected = {}
+            if runtime.get("desired", {}).get("model") is None:
+                # Older/default or explicitly native-owned models still use
+                # the compatibility model until a managed one is declared.
+                legacy = self._cat(f"{self._prefix}/openclaw.json")
+                if not legacy:
+                    raise RuntimeError("Worker model compatibility configuration is unavailable")
+                projected = json.loads(legacy)
             # The bridge must consume the exact standard snapshot just read,
             # rather than a previous generation left by a native mirror.
             path = self.local_dir / "runtime/runtime.yaml"
@@ -401,7 +409,8 @@ class FileSync:
             with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as pending:
                 pending.write(runtime_text)
             os.replace(pending.name, path)
-            return {"channels": {"matrix": matrix}}
+            projected.setdefault("channels", {})["matrix"] = matrix
+            return projected
         text = self._cat(f"{self._prefix}/openclaw.json")
         if not text:
             raise RuntimeError(
