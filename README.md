@@ -97,3 +97,22 @@ deterministic fixture so loss of history causes an exact assertion failure.
 ```sh
 python3 tests/upgrade_e2e.py --new-image ghcr.io/agentteams-group/agentteams-harness-hermes:v0.1.0
 ```
+
+## Worker recovery candidate (#1631)
+
+The 1.2.8 candidate requires the pinned Core recovery APIs. Before Matrix
+connect admits new work, it registers the actual Worker start and claims its
+assigned Tasks. Task progress remains authoritative in the Task system.
+Native session reuse reads the common `runtime/sessions/hermes/<work-key>.json`
+descriptor and verifies actual SDK database content, expiry, current checkpoint
+and configuration generation. The former private recovery marker is not used
+as authority. Missing/stale native state creates a fresh session for the same
+Task; unknown side effects remain in verification state. Native `state.db` and
+Matrix crypto backups include committed WAL data. Workspace sync cannot write
+Controller-owned common recovery records.
+
+Host tests and the installed-SDK recovery smoke cover these boundaries with
+mocked Controller requests. They do not establish real Task/model continuation,
+ordinary-room message recovery, native sync cursor/backfill integration, the
+complete fault suite or cross-Harness switching. Those remain tracked in
+[AgentTeams #1631](https://github.com/agentscope-ai/AgentTeams/issues/1631).

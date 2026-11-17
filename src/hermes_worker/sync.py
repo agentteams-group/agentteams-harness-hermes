@@ -601,6 +601,8 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
     _EXCLUDE_PATHS = {
         "config/mcporter.json",
         "runtime/runtime.yaml",
+        "runtime/state.json",
+        "runtime/compat-config.json",
     }
     _EXCLUDE_DIRS = {
         ".agents",
@@ -686,9 +688,10 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
             continue
         rel = path.relative_to(local_dir)
         matrix_crypto = rel in _MATRIX_CRYPTO_DATABASES
+        sqlite_state = matrix_crypto or rel == Path(".hermes/state.db")
         try:
             modified = path.stat().st_mtime
-            if matrix_crypto:
+            if sqlite_state:
                 wal = Path(str(path) + "-wal")
                 if wal.exists():
                     modified = max(modified, wal.stat().st_mtime)
@@ -699,6 +702,8 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
         if len(rel.parts) == 1 and rel.name in _EXCLUDE_FILES:
             continue
         if rel.as_posix() in _EXCLUDE_PATHS:
+            continue
+        if any(parent in rel.parents for parent in (Path("runtime/matrix"), Path("runtime/sessions"))):
             continue
         if any(p in _EXCLUDE_DIRS for p in rel.parts):
             continue
@@ -728,11 +733,11 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
 
         key = f"{sync._prefix}/{rel.as_posix()}"
         try:
-            if matrix_crypto:
+            if sqlite_state:
                 # Copying a live SQLite main file alone drops committed WAL
                 # rows. The backup API produces one consistent standalone DB.
-                with tempfile.TemporaryDirectory(prefix="hermes-crypto-") as directory:
-                    backup = Path(directory) / "crypto.db"
+                with tempfile.TemporaryDirectory(prefix="hermes-state-") as directory:
+                    backup = Path(directory) / path.name
                     with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as source:
                         with closing(sqlite3.connect(backup)) as target:
                             source.backup(target)

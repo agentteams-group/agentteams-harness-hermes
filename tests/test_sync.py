@@ -12,6 +12,23 @@ from hermes_worker import sync as sync_module
 from hermes_worker.sync import FileSync, push_local
 
 
+def test_workspace_mirror_never_writes_controller_owned_recovery_records(tmp_path, monkeypatch):
+    sync = FileSync(endpoint="http://minio:9000", access_key="test", secret_key="test",
+                    bucket="test", worker_name="worker", local_dir=tmp_path)
+    for rel in ["runtime/runtime.yaml", "runtime/state.json", "runtime/compat-config.json",
+                "runtime/matrix/state.json", "runtime/matrix/events/event.json", "runtime/sessions/hermes/work.json"]:
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("old local projection")
+    (tmp_path / "SOUL.md").write_text("Your personality")
+    monkeypatch.setattr(sync, "_ensure_alias", lambda: None)
+    monkeypatch.setattr(sync, "_cat", lambda key: "")
+    copies = []
+    monkeypatch.setattr(sync_module, "_mc", lambda *args, **kwargs: copies.append(args))
+    assert push_local(sync) == ["SOUL.md"]
+    assert len(copies) == 1 and copies[0][-1].endswith("/agents/worker/SOUL.md")
+
+
 def test_standard_worker_record_loads_without_compatibility_or_native_config(tmp_path, monkeypatch):
     sync = FileSync(endpoint="http://minio:9000", access_key="test", secret_key="test",
                     bucket="test", worker_name="worker", local_dir=tmp_path)
@@ -243,15 +260,16 @@ def test_push_local_persists_user_plugins_but_skips_image_overlay(
     assert ".hermes/plugins/platforms/matrix/adapter.py" not in pushed
 
 
-def test_push_local_preserves_matrix_crypto_database_with_uncheckpointed_wal(tmp_path, monkeypatch):
-    """A recreated worker needs the committed crypto state, including WAL rows."""
+@pytest.mark.parametrize("relative_path", [".hermes/platforms/matrix/store/crypto.db", ".hermes/state.db"])
+def test_push_local_preserves_durable_database_with_uncheckpointed_wal(tmp_path, monkeypatch, relative_path):
+    """Recreation needs committed native session/crypto rows, including WAL."""
     import os
     import shutil
     import sqlite3
 
     sync = FileSync(endpoint="http://minio:9000", access_key="minio", secret_key="synthetic",
                     bucket="agentteams-storage", worker_name="worker-a", local_dir=tmp_path / "worker")
-    db = sync.local_dir / ".hermes/platforms/matrix/store/crypto.db"
+    db = sync.local_dir / relative_path
     db.parent.mkdir(parents=True)
     remote = tmp_path / "restored-crypto.db"
     connection = sqlite3.connect(db)
@@ -275,7 +293,7 @@ def test_push_local_preserves_matrix_crypto_database_with_uncheckpointed_wal(tmp
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
         monkeypatch.setattr(sync_module, "_mc", fake_mc)
         pushed = push_local(sync, since=2)
-        assert ".hermes/platforms/matrix/store/crypto.db" in pushed
+        assert relative_path in pushed
         assert len(copies) == 1
         with sqlite3.connect(remote) as restored:
             assert restored.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
