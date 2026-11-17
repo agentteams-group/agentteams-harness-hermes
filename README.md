@@ -118,15 +118,25 @@ authorized approval decisions also wait for their control input to be saved.
 Each callback retains its actual Matrix source timestamp independently of
 overlapping callbacks. Managed Workers suppress the stock mention-time read
 marker; existing custom read receipts still use actual persisted SDK rows.
-This per-event hook does not advance a shared sync cursor. The common native
-commit guard before inference, batch/cursor/backfill and legacy consumption
-integration remain open; the new hook alone does not complete recovery.
+The pinned SDK's turn prologue now saves and reads back the actual current user
+row, then commits its common native fact before plugin hooks, compaction or
+inference. It wraps the call site outside the SDK's fail-open plugin dispatcher.
+Missing input, failed/disabled persistence, an old row or failed common CAS
+stops execution. Managed custom read delivery independently waits for that
+matching fact. Startup without a source event does not manufacture read facts.
+This per-event hook does not advance a shared sync cursor; batch/cursor/backfill,
+legacy consumption and ordinary-message execution integration remain open.
 
 Host tests pass57 with1 native-SDK skip. The candidate installed-SDK checks
 pass15 callback/session/direct-control tests, the native decoded-input smoke,
 the2 native approval queue tests (including failed input persistence), native
 Task/session recovery and native Task-tool discovery. Controller and Matrix
 transport are mocked; these are not new real-model E2E results.
+
+Five further native-SDK tests verify actual row IDs/readback, repeated flush
+deduplication, storage/fact failures and a full native turn against a local
+streaming fixture. The native fact precedes compaction and inference, and
+failed CAS permits neither. This test does not establish real Task continuation.
 
 Host tests and the installed-SDK recovery smoke cover these boundaries with
 mocked Controller requests. They do not establish real Task/model continuation,

@@ -125,6 +125,9 @@ class MatrixAdapter(_NativeMatrixAdapter):
         self._dashboard_approvals = MatrixApprovals(self._send_dashboard_approval)
         self._recovered_admissions = set()
         self._task_recovery_lock = asyncio.Lock()
+        if os.getenv("AGENTTEAMS_CONTROLLER_URL") and os.getenv("AGENTTEAMS_PROCESS_ID"):
+            from hermes_matrix.input_commit import install_native_input_guard
+            install_native_input_guard()
 
     async def _recover_tasks(self, only_task=None, *, claim_only=False, source_event=None):
         if not os.getenv("AGENTTEAMS_CONTROLLER_URL") or not os.getenv("AGENTTEAMS_PROCESS_ID"):
