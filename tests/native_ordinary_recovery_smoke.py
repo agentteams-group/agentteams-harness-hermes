@@ -58,6 +58,15 @@ class OrdinaryTests(unittest.IsolatedAsyncioTestCase):
         self.client.send_message_event.assert_not_awaited()
         self.matrix.message_delivered.assert_called_once_with(self.identity, "$canonical")
         self.matrix.message_delivered.reset_mock()
+        # A newer sender always stores its canonical marker in content. A
+        # device-scoped unsigned transaction from another session is ambiguous.
+        unmarked = Event.deserialize({"room_id":"!room:test","type":"m.room.message","event_id":"$decoy",
+            "sender":"@worker:test","origin_server_ts":12346,"content":{"msgtype":"m.text","body":"durable answer"},
+            "unsigned":{"transaction_id":"same-txn"}})
+        self.client.get_messages.return_value.events = [unmarked]
+        await self.ordinary.drain()
+        self.matrix.message_delivered.assert_not_called()
+        self.client.get_messages.return_value.events = [reply]
         reply.sender = "@other:test"
         await self.ordinary.drain()
         self.matrix.message_delivered.assert_not_called()

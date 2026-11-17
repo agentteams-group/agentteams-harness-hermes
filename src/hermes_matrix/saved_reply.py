@@ -31,9 +31,11 @@ async def deliver(client, room, checkpoint, text, content, bind):
                     event = await client.crypto.decrypt_megolm_event(event)
                 raw = event.serialize()
                 msg = raw.get("content", {})
-                marker = msg.get("org.agentteams.reply_txn") or (raw.get("unsigned") or {}).get("transaction_id")
+                marker = msg.get("org.agentteams.reply_txn")
+                if marker is None and not checkpoint.get("reply_attempt"):
+                    marker = (raw.get("unsigned") or {}).get("transaction_id")
                 if (raw.get("room_id") == room and raw.get("sender") == sender and raw.get("type") == "m.room.message"
-                        and marker == txn and msg.get("body") == body):
+                        and msg.get("msgtype") == "m.text" and marker == txn and msg.get("body") == body):
                     return raw["event_id"]
             if not page.end or not page.events:
                 break
