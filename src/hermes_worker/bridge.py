@@ -568,7 +568,12 @@ def bridge_openclaw_to_hermes(
     # inside the worker container (no docker-in-docker).
     terminal = existing_yaml.setdefault("terminal", {})
     terminal.setdefault("backend", "local")
-    terminal.setdefault("cwd", str(hermes_home))
+    if member.get("runtime") == "hermes":
+        # Shared task/artifact paths belong to the Worker, not the SDK's private
+        # session/config directory or a previous Harness's local setting.
+        terminal["cwd"] = str(hermes_home.parent)
+    else:
+        terminal.setdefault("cwd", str(hermes_home))
 
     # Team Task tools consume the Controller's own role/scope contract. Keep
     # the legacy model/Matrix bridge, but do not infer scope from local Tasks.
