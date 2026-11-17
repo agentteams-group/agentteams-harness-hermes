@@ -1,4 +1,5 @@
 """Pinned Hermes executor and gateway boundaries, with fixture transport and authority."""
+import hashlib
 import os
 from pathlib import Path
 import tempfile
@@ -21,12 +22,12 @@ class OrdinaryTests(unittest.IsolatedAsyncioTestCase):
                       "event_id": "$source", "room_id": "!room:test", "intent": "message"}
         self.matrix.input.return_value = self.entry
         self.saved = {"input": self.entry, "recovery": "deliver", "identity": self.identity,
-                      "execution": {"state": "active", "checkpoint": {"delivery": "pending", "reply_txn": "same-txn"}},
+                      "execution": {"state": "active", "checkpoint": {"version":1,"delivery": "pending", "reply_txn": "same-txn", "result":{"size":len(b"durable answer"),"sha256":hashlib.sha256(b"durable answer").hexdigest()},"reply_attempt":{"state":"sending","user_id":"@worker:test","device_id":"A"}}},
                       "saved_result": "durable answer"}
         self.matrix.message.return_value = self.saved
         self.matrix.message_claim.return_value = self.saved
         self.matrix.message_delivered.return_value = {"recovery": "done"}
-        self.client = SimpleNamespace(get_joined_rooms=AsyncMock(return_value=["!room:test"]),
+        self.client = SimpleNamespace(mxid="@worker:test", whoami=AsyncMock(return_value=SimpleNamespace(user_id="@worker:test",device_id="A")), get_joined_rooms=AsyncMock(return_value=["!room:test"]),
             send_message_event=AsyncMock(side_effect=[TimeoutError("ACK lost"), "$canonical"]))
         self.adapter = SimpleNamespace(_client=self.client, _dual_allow=Mock(), _is_dm_room=AsyncMock(return_value=True),
             _is_allowed_matrix_room_event=AsyncMock(return_value=True), _is_self_sender=Mock(return_value=False),
@@ -46,6 +47,21 @@ class OrdinaryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(args[2]["m.relates_to"]["m.in_reply_to"]["event_id"], "$source")
             self.assertEqual(kwargs["txn_id"], "same-txn")
         self.matrix.message_delivered.assert_called_once_with(self.identity, "$canonical")
+
+    async def test_changed_device_recovers_original_event_and_never_resends(self):
+        from mautrix.types import Event
+        reply = Event.deserialize({"room_id":"!room:test","type":"m.room.message","event_id":"$canonical",
+            "sender":"@worker:test","origin_server_ts":12345,"content":{"msgtype":"m.text","body":"durable answer","org.agentteams.reply_txn":"same-txn"}})
+        self.client.whoami.return_value.device_id = "B"
+        self.client.get_messages = AsyncMock(return_value=SimpleNamespace(events=[reply],end=None))
+        await self.ordinary.drain()
+        self.client.send_message_event.assert_not_awaited()
+        self.matrix.message_delivered.assert_called_once_with(self.identity, "$canonical")
+        self.matrix.message_delivered.reset_mock()
+        reply.sender = "@other:test"
+        await self.ordinary.drain()
+        self.matrix.message_delivered.assert_not_called()
+        self.client.send_message_event.assert_not_awaited()
 
     async def test_reassigned_room_or_unknown_outcome_never_dispatches(self):
         self.client.get_joined_rooms.return_value = []

@@ -154,7 +154,7 @@ class PendingInputs:
         await self.adapter._recover_tasks(work["task_id"], only_team=work["team_id"], source_event=event)
 
     async def deliver(self, saved):
-        from mautrix.types import EventType, RoomID
+        from hermes_matrix.saved_reply import deliver, check_binding
         if saved["recovery"] != "deliver" or saved["execution"]["state"] != "active":
             raise RecoveryConflict("Worker cannot send an unowned or unverified reply")
         entry = saved["input"]
@@ -162,9 +162,11 @@ class PendingInputs:
         reply = {"m.in_reply_to": {"event_id": entry["event_id"]}}
         if relation.get("rel_type") == "m.thread" and relation.get("event_id"):
             reply.update(rel_type="m.thread", event_id=relation["event_id"], is_falling_back=True)
-        result = await self.adapter._client.send_message_event(RoomID(entry["room_id"]), EventType.ROOM_MESSAGE,
-            {"msgtype": "m.text", "body": saved["saved_result"], "m.relates_to": reply},
-            txn_id=saved["execution"]["checkpoint"]["reply_txn"])
+        async def bind(cp):
+            fresh = await asyncio.to_thread(self.matrix.message_checkpoint, saved["identity"], cp)
+            check_binding(saved["execution"], cp, fresh)
+        result = await deliver(self.adapter._client, entry["room_id"], saved["execution"]["checkpoint"],
+            saved["saved_result"], {"msgtype": "m.text", "m.relates_to": reply}, bind)
         await asyncio.to_thread(self.matrix.message_delivered, saved["identity"], str(result))
         return str(result)
 

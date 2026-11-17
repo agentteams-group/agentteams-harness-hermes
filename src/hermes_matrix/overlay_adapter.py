@@ -143,12 +143,11 @@ class MatrixAdapter(_NativeMatrixAdapter):
         from worker_matrix_state import WorkerMatrix
         from worker_sessions import WorkerSessions
         from hermes_matrix.session_cache import session_fingerprint
-        recovery = Recovery()
+        recovery = Recovery(device_delivery=True)
         await asyncio.to_thread(WorkerMatrix("hermes", recovery=recovery).start)
         sessions = WorkerSessions("hermes", recovery=recovery)
         snapshot = await asyncio.to_thread(recovery.discover)
         from gateway.platforms.event import MessageEvent
-        from mautrix.types import EventType, RoomID
         for entry in snapshot["tasks"]:
             task_id, team = entry["task"]["task_id"], entry["team_id"]
             if only_task is not None and task_id != only_task:
@@ -169,9 +168,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
             cp = task["execution"].get("checkpoint") or {}
             room = task["room_id"]
             if cp.get("delivery") == "pending":
-                result = await self._client.send_message_event(RoomID(room), EventType.ROOM_MESSAGE,
-                    {"msgtype": "m.text", "body": claimed["saved_result"], "org.agentteams.progress_only": True},
-                    txn_id=cp["reply_txn"])
+                from hermes_matrix.saved_reply import task_reply
+                result = await task_reply(self, recovery, task_id, team, room, claimed, claimed["saved_result"])
                 await asyncio.to_thread(recovery.delivered, task_id, team, str(result))
                 task = await asyncio.to_thread(recovery.current, task_id, team)
                 if task is None:
@@ -282,8 +280,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
             return await super()._send_final_text(event, session_key, text_content, metadata,
                 is_ephemeral_response, ephemeral_ttl, record_delivery)
         from task_recovery import Recovery
-        from mautrix.types import EventType, RoomID
-        recovery = Recovery()
+        recovery = Recovery(device_delivery=True)
         task_id, team = identity["task_id"], identity["team_id"]
         from task_recovery import RecoveryConflict
         current = await asyncio.to_thread(recovery.current, task_id, team)
@@ -294,8 +291,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
         if cp.get("delivery") == "delivered":
             record_delivery(types.SimpleNamespace(success=True, message_id=cp["reply_event"]))
             return
-        result = await self._client.send_message_event(RoomID(event.source.chat_id), EventType.ROOM_MESSAGE,
-            {"msgtype": "m.text", "body": text_content, "org.agentteams.progress_only": True}, txn_id=cp["reply_txn"])
+        from hermes_matrix.saved_reply import task_reply
+        result = await task_reply(self, recovery, task_id, team, event.source.chat_id, saved, text_content)
         saved = await asyncio.to_thread(recovery.delivered, task_id, team, str(result))
         record_delivery(types.SimpleNamespace(success=True, message_id=str(result)))
         # The pinned SDK persists its final transcript before this send hook.

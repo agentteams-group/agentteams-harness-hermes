@@ -42,7 +42,7 @@ def forget_failed_input(adapter, event_id):
 class NativeSync:
     def __init__(self, adapter, client):
         self.adapter, self.client = adapter, client
-        self.matrix = WorkerMatrix("hermes")
+        self.matrix = WorkerMatrix("hermes", device_delivery=True)
         self.response = self.consumer = self.error = None
         self.initialized = False
         self.dispatch_event = self.client.dispatch_event

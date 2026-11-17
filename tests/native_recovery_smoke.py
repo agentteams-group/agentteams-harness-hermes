@@ -3,6 +3,7 @@
 This is not model/tool continuation or real Matrix delivery acceptance.
 """
 import asyncio
+import hashlib
 import os
 from pathlib import Path
 import tempfile
@@ -29,7 +30,7 @@ async def check(workspace):
     recovery = Mock(process="actual-start")
     recovery.digest = Recovery.digest
     recovery.discover.return_value = {"instance_id": "new-start", "runtime": "hermes", "tasks": [{"team_id": "team", "task": task, "etag": "task-etag"}]}
-    recovery.claim.return_value = {"task": task, "spec": "Do one, two, three", "saved_result": "Saved answer"}
+    recovery.claim.return_value = {"task": task, "execution": task["execution"], "spec": "Do one, two, three", "saved_result": "Saved authoritative answer"}
     recovery.current.return_value = task
     recovery.resume_text.return_value = "Resume step two from checkpoint three"
     caches = {}
@@ -67,7 +68,7 @@ async def check(workspace):
     recovery.request.side_effect = request
     adapter = MatrixAdapter(PlatformConfig(enabled=True))
     adapter._user_id = "@alice:test"
-    adapter._client = SimpleNamespace(send_message_event=AsyncMock(return_value="$sent"))
+    adapter._client = SimpleNamespace(mxid="@worker:test", whoami=AsyncMock(return_value=SimpleNamespace(user_id="@worker:test",device_id="A")), send_message_event=AsyncMock(return_value="$sent"))
     observed = []
     runner = GatewayRunner.__new__(GatewayRunner)
     runner.config = SimpleNamespace(multiplex_profiles=False)
@@ -108,7 +109,9 @@ async def check(workspace):
         adapter._client.send_message_event.assert_not_called()
         await adapter._recover_tasks()
         assert len(observed) == 1
-        cp = {"version": 4, "delivery": "pending", "reply_txn": "stable-reply"}
+        cp = {"version": 4, "delivery": "pending", "reply_txn": "stable-reply",
+              "reply_attempt":{"state":"sending","user_id":"@worker:test","device_id":"A"},
+              "result":{"size":len(b"Saved authoritative answer"),"sha256":hashlib.sha256(b"Saved authoritative answer").hexdigest()}}
         task["execution"]["checkpoint"] = cp
         await adapter._recover_tasks()
         assert len(observed) == 1
