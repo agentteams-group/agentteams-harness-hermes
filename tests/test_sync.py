@@ -119,6 +119,32 @@ def test_manager_role_projection_does_not_overwrite_personality(tmp_path, monkey
     assert (tmp_path / "SOUL.md").read_text() == "Your updated personality."
 
 
+@pytest.mark.parametrize("prefix_missing", [False, True])
+def test_mirror_all_restores_standard_record_without_compatibility(tmp_path, monkeypatch, prefix_missing):
+    sync = FileSync(endpoint="http://minio:9000", access_key="test", secret_key="test",
+                    bucket="test", worker_name="worker", local_dir=tmp_path)
+    record = yaml.safe_dump({"member": {"runtime": "hermes"}, "team": {"name": "new-team"}})
+    monkeypatch.setattr(sync, "_ensure_alias", lambda: None)
+    monkeypatch.setattr(sync, "_cat", lambda key: record if key.endswith("runtime/runtime.yaml") else None)
+    mirrors = []
+
+    def mirror(*args, **_kwargs):
+        mirrors.append(args)
+        if args[1].endswith("/agents/worker/"):
+            if prefix_missing:
+                raise subprocess.CalledProcessError(1, args, stderr="Object does not exist")
+            path = tmp_path / "runtime/runtime.yaml"
+            path.parent.mkdir()
+            path.write_text(record)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sync_module, "_mc", mirror)
+    sync.mirror_all()
+    assert not (tmp_path / "openclaw.json").exists()
+    assert (tmp_path / "runtime/runtime.yaml").read_text() == record
+    assert any(command[1].endswith("/teams/new-team/shared/") for command in mirrors)
+
+
 def test_mirror_all_falls_back_to_startup_files_when_prefix_missing(
     tmp_path, monkeypatch
 ) -> None:

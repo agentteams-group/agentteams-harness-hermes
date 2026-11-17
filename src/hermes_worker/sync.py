@@ -299,9 +299,9 @@ class FileSync:
                     ", ".join(startup_changed),
                 )
 
-        if not (self.local_dir / "openclaw.json").exists():
+        if not any((self.local_dir / path).is_file() for path in ("runtime/runtime.yaml", "openclaw.json")):
             raise RuntimeError(
-                f"openclaw.json not found in MinIO for worker {self.worker_name}"
+                f"Worker runtime/runtime.yaml or openclaw.json not found in MinIO for worker {self.worker_name}"
             )
 
         shared_remote = self._get_shared_remote()
