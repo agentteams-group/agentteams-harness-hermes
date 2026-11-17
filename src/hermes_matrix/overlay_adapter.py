@@ -299,15 +299,31 @@ class MatrixAdapter(_NativeMatrixAdapter):
         source = _matrix_source_event.get()
         decoded = {"sender": sender, "type": "m.room.message",
             "origin_server_ts": int(getattr(source, "timestamp", 0) or 0), "content": content}
+        shared = getattr(self, "_shared_sync", None)
+        if shared is not None:
+            from hermes_matrix.sync_state import current_admission
+            admission = current_admission()
+            if admission is not None:
+                return await admission.retain(shared.matrix, room, event_id, decoded, intent, task_id)
         async with self._task_recovery_lock:
             return await asyncio.to_thread(WorkerMatrix("hermes").accept,
                 room, event_id, decoded, intent, task_id=task_id)
 
     async def _on_room_message(self, event):
         token = _matrix_source_event.set(event)
+        error = None
         try:
             return await self._on_matrix_input(event)
+        except Exception as exc:
+            error = exc
+            raise
         finally:
+            if getattr(self, "_shared_sync", None) is not None:
+                from hermes_matrix.sync_state import current_admission
+                admission = current_admission()
+                if admission is not None:
+                    admission.error = error
+                    admission.ready.set()
             _matrix_source_event.reset(token)
 
     async def _on_matrix_input(self, event):
@@ -443,6 +459,33 @@ class MatrixAdapter(_NativeMatrixAdapter):
     async def _send_exec_approval_prompt(self, prompt):
         result = await self._dashboard_approvals.prompt(prompt)
         return result if result is not None else await super()._send_exec_approval_prompt(prompt)
+
+    async def _connect_initial_sync(self, client):
+        if not os.getenv("AGENTTEAMS_CONTROLLER_URL") or not os.getenv("AGENTTEAMS_PROCESS_ID"):
+            return await super()._connect_initial_sync(client)
+        from task_recovery import enabled
+        if not enabled():
+            return await super()._connect_initial_sync(client)
+        from hermes_matrix.sync_state import NativeSync
+        self._shared_sync = NativeSync(self, client)
+        self._shared_sync.install()
+        # The shared timeline cursor includes messages received while offline.
+        # The SDK's five-second startup cutoff would discard those messages.
+        self._startup_ts = 0
+        await super()._connect_initial_sync(client)
+        # The native initial-sync helper logs and suppresses errors. A failed
+        # shared commit must not be advertised as successful startup.
+        if self._shared_sync.error is not None:
+            raise self._shared_sync.error
+        if not self._shared_sync.initialized:
+            raise RuntimeError("No committed Matrix response on initial sync")
+
+    async def _absorb_sync(self, client, sync_data, *, initial=False):
+        shared = getattr(self, "_shared_sync", None)
+        if shared is None:
+            return await super()._absorb_sync(client, sync_data, initial=initial)
+        native = super()._absorb_sync
+        return await shared.absorb(sync_data, lambda data: native(client, data, initial=initial))
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         trace_event("startup.stage", stage="matrix.connect")

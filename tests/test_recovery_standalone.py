@@ -21,3 +21,17 @@ def test_unconfigured_recovery_does_not_import_core_library(monkeypatch):
         monkeypatch.setattr(native, "connect", connect, raising=False)
         assert await adapter.connect(is_reconnect=True)
     asyncio.run(check())
+
+
+def test_unconfigured_initial_sync_does_not_import_core_library(monkeypatch):
+    module, native = _load_overlay_with_fake_gateway(monkeypatch)
+    monkeypatch.delenv("AGENTTEAMS_CONTROLLER_URL", raising=False)
+    monkeypatch.delenv("AGENTTEAMS_PROCESS_ID", raising=False)
+    monkeypatch.setitem(sys.modules, "task_recovery", None)
+    seen = []
+    async def initial_sync(self, client):
+        seen.append(client)
+    monkeypatch.setattr(native, "_connect_initial_sync", initial_sync, raising=False)
+    adapter = module.MatrixAdapter.__new__(module.MatrixAdapter)
+    asyncio.run(adapter._connect_initial_sync("native-client"))
+    assert seen == ["native-client"]
