@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import yaml
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -21,18 +22,33 @@ def main() -> None:
     ).strip()
     assert tag == "v0.23.0", tag
     with tempfile.TemporaryDirectory() as temp:
-        home = Path(temp)
+        workspace = Path(temp)
+        home = workspace / ".hermes"
         os.environ["HERMES_HOME"] = str(home)
+        os.environ["AGENTTEAMS_AGENT_ROLE"] = "worker"
+        os.environ["AGENTTEAMS_WORKER_ROLE"] = "worker"
+        os.environ["AGENTTEAMS_WORKER_NAME"] = "smoke-worker"
+        os.environ["AGENTTEAMS_OTEL_RUNTIME"] = "hermes"
+        os.environ["AGENTTEAMS_LOG_ROLE"] = "worker"
+        os.environ["AGENTTEAMS_LOG_RUNTIME"] = "hermes"
         os.environ["MATRIX_HOMESERVER"] = "http://matrix.invalid:8008"
         os.environ["MATRIX_ACCESS_TOKEN"] = "synthetic-smoke-token"
         os.environ["MATRIX_USER_ID"] = "@worker:matrix.invalid"
         os.environ["MATRIX_ALLOWED_USERS"] = "@alice:matrix.invalid"
-        shutil.copytree("/opt/agentteams/hermes-plugins", home / "plugins")
+        os.environ["WORKER_SMOKE_GATEWAY_KEY"] = "worker-scoped-smoke-key"
+        runtime = workspace / "runtime/runtime.yaml"
+        runtime.parent.mkdir()
+        runtime.write_text(yaml.safe_dump({
+            "member": {"runtime": "hermes", "role": "worker"},
+            "desired": {"model": {"model": "worker-model", "providerId": "agentteams-gateway",
+                "gatewayUrl": "http://worker-gateway.invalid/v1", "input": ["text"]}},
+            "credentials": {"gatewayKeyEnv": "WORKER_SMOKE_GATEWAY_KEY"},
+        }))
 
         from hermes_worker.bridge import bridge_openclaw_to_hermes
         from hermes_worker.worker import Worker
 
-        bridge_openclaw_to_hermes({
+        compatibility = {
             "channels": {"matrix": {
                 "homeserver": os.environ["MATRIX_HOMESERVER"],
                 "accessToken": os.environ["MATRIX_ACCESS_TOKEN"],
@@ -44,8 +60,26 @@ def main() -> None:
                 "models": [{"id": "test-model", "input": ["text"]}],
             }}},
             "agents": {"defaults": {"model": {"primary": "gw/test-model"}}},
-        }, home)
-        Worker._load_env_file(home / ".env")
+        }
+        for empty_native_directory in (False, True):
+            if empty_native_directory:
+                shutil.rmtree(home)
+            else:
+                home.mkdir()
+                (home / "config.yaml").write_text(yaml.safe_dump({
+                    "model": {"default": "old-native-model"},
+                    "auxiliary": {"vision": {"api_key": "old-native-key"}},
+                }))
+                (home / ".env").write_text("OPENAI_API_KEY=old-native-key\n")
+            shutil.copytree("/opt/agentteams/hermes-plugins", home / "plugins")
+            bridge_openclaw_to_hermes(compatibility, home)
+            Worker._load_env_file(home / ".env")
+            from hermes_cli.config import load_config
+            effective = load_config()
+            assert effective["model"]["default"] == "worker-model"
+            assert effective["model"]["base_url"] == "http://worker-gateway.invalid/v1"
+            assert os.environ["OPENAI_API_KEY"] == "worker-scoped-smoke-key"
+            assert "old-native-key" not in (home / "config.yaml").read_text()
 
         from gateway.config import PlatformConfig, load_gateway_config
         from gateway.run import start_gateway
@@ -89,7 +123,7 @@ def main() -> None:
             assert sent.await_count == 1
 
         asyncio.run(check_mentions())
-    print(f"PASS: {tag}, gateway config, native Matrix interfaces, plugin discovery, reconnect and mentions")
+    print(f"PASS: {tag}, Worker model reconstruction/SDK readback, gateway config, native Matrix interfaces, plugin discovery, mocked reconnect and mentions (no model/Task execution)")
 
 
 if __name__ == "__main__":
