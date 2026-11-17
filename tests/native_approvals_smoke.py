@@ -48,8 +48,22 @@ class NativeApprovalSmoke(unittest.IsolatedAsyncioTestCase):
                 await transport.answer("!room", "@intruder", body)
                 await transport.answer("!room", "@owner", body.replace(data["context_id"], "stale"))
                 self.assertFalse(wait.done())
+                async def fail_persistence():
+                    raise OSError("shared control input could not be saved")
+                with patch.object(native, "resolve_gateway_approval_card", wraps=native.resolve_gateway_approval_card) as resolve:
+                    with self.assertRaises(OSError):
+                        await transport.answer("!room", "@owner", body, before_answer=fail_persistence)
+                    resolve.assert_not_called()
+                    self.assertFalse(wait.done())
+                    self.assertIsNone(next(iter(transport.pending.values()))["decision"])
+                persisted = []
+                async def persist():
+                    self.assertFalse(wait.done())
+                    persisted.append("control")
                 with patch.dict(os.environ, {"AGENTTEAMS_ADMIN_USER": "admin", "AGENTTEAMS_MATRIX_DOMAIN": "matrix"}):
-                    await transport.answer("!room", "@admin:matrix" if action == "approve" else "@owner", "@worker " + body)
+                    await transport.answer("!room", "@admin:matrix" if action == "approve" else "@owner", "@worker " + body,
+                        before_answer=persist)
+                self.assertEqual(persisted, ["control"])
                 result = await asyncio.wait_for(wait, 10)
                 self.assertEqual(result["choice"], expected)
                 proof = subprocess.check_output(["sh", "-c", "printf native-proof"], text=True) if result["choice"] == "once" else ""

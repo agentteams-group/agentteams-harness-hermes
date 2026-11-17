@@ -37,6 +37,7 @@ from hermes_matrix.policies import (
 
 logger = logging.getLogger(__name__)
 _coordination_turn = ContextVar("agentteams_task_notification", default=False)
+_matrix_source_event = ContextVar("agentteams_matrix_source", default=None)
 try:
     from runtime_observability import event as trace_event
 except ImportError:
@@ -287,7 +288,26 @@ class MatrixAdapter(_NativeMatrixAdapter):
         # The pinned SDK persists its final transcript before this send hook.
         await self._remember_task_session(recovery, identity, saved, session_key)
 
+    async def _accept_matrix_input(self, room, sender, event_id, content, intent, *, task_id=None):
+        from task_recovery import enabled
+        if not enabled():
+            return
+        from worker_matrix_state import WorkerMatrix
+        source = _matrix_source_event.get()
+        decoded = {"sender": sender, "type": "m.room.message",
+            "origin_server_ts": int(getattr(source, "timestamp", 0) or 0), "content": content}
+        async with self._task_recovery_lock:
+            return await asyncio.to_thread(WorkerMatrix("hermes").accept,
+                room, event_id, decoded, intent, task_id=task_id)
+
     async def _on_room_message(self, event):
+        token = _matrix_source_event.set(event)
+        try:
+            return await self._on_matrix_input(event)
+        finally:
+            _matrix_source_event.reset(token)
+
+    async def _on_matrix_input(self, event):
         content = getattr(event, "content", None)
         content = content if isinstance(content, dict) else content.serialize() if hasattr(content, "serialize") else {}
         if "org.agentteams.coordination" not in content and content.get("org.agentteams.progress_only") is not True:
@@ -305,8 +325,11 @@ class MatrixAdapter(_NativeMatrixAdapter):
             # Retain this verified Matrix source when its Task input enters
             # the native session. Startup-only recovery has no source event
             # and must never manufacture a Matrix read receipt.
+            await self._accept_matrix_input(str(event.room_id), str(event.sender), str(event.event_id),
+                content, "task_notification", task_id=canonical["task_id"])
             await self._recover_tasks(canonical["task_id"], source_event=event)
             return
+        await self._accept_matrix_input(str(event.room_id), str(event.sender), str(event.event_id), content, "control")
         # The receipt admits the Leader's self-addressed closure without
         # weakening the native own-echo policy for ordinary messages.
         # A real Matrix event starts the native thread/session. Keep opaque
@@ -513,7 +536,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
         if not self._dual_allow.permits(sender, is_dm=is_dm):
             return None
 
-        if await self._dashboard_approvals.answer(room_id, sender, body):
+        if await self._dashboard_approvals.answer(room_id, sender, body,
+                before_answer=lambda: self._accept_matrix_input(room_id, sender, event_id, source_content, "control")):
             return None
 
         ctx = await super()._resolve_message_context(
@@ -528,10 +552,14 @@ class MatrixAdapter(_NativeMatrixAdapter):
         )
         if ctx is None:
             if not is_dm:
+                await self._accept_matrix_input(room_id, sender, event_id, source_content, "context")
                 display = await self._get_display_name(room_id, sender)
                 history_body = _describe_dropped_media(source_content, body)
                 self._history.record(room_id, display, history_body, event_id)
             return None
+
+        intent = "control" if (_is_commandish(body) or "com.agentteams.control" in source_content) else "message"
+        await self._accept_matrix_input(room_id, sender, event_id, source_content, intent)
 
         trace_event("message.received", room_id=room_id, event_id=event_id, sender=sender)
         body, is_dm, chat_type, thread_id, display_name, source = ctx
@@ -552,6 +580,13 @@ class MatrixAdapter(_NativeMatrixAdapter):
             if self._session_receipts:
                 await asyncio.to_thread(self._session_receipts.link, room_id, event_id, history_ids)
         return body, is_dm, chat_type, thread_id, display_name, source
+
+    def _background_read_receipt(self, room_id, event_id):
+        from task_recovery import enabled
+        if not enabled():
+            return super()._background_read_receipt(room_id, event_id)
+        # Native mention gating precedes input admission and persistence.
+        # Managed reads come from actual persisted SDK rows, never this gate.
 
     async def _handle_media_message(
         self,

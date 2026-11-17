@@ -111,6 +111,23 @@ Task; unknown side effects remain in verification state. Native `state.db` and
 Matrix crypto backups include committed WAL data. Workspace sync cannot write
 Controller-owned common recovery records.
 
+The candidate now uses Core's `WorkerMatrix.accept` for decoded accepted text,
+media, retained group context, controls and verified Task assignments. Shared
+input persistence precedes native enqueue/history buffering or Task claim;
+authorized approval decisions also wait for their control input to be saved.
+Each callback retains its actual Matrix source timestamp independently of
+overlapping callbacks. Managed Workers suppress the stock mention-time read
+marker; existing custom read receipts still use actual persisted SDK rows.
+This per-event hook does not advance a shared sync cursor. The common native
+commit guard before inference, batch/cursor/backfill and legacy consumption
+integration remain open; the new hook alone does not complete recovery.
+
+Host tests pass57 with1 native-SDK skip. The candidate installed-SDK checks
+pass15 callback/session/direct-control tests, the native decoded-input smoke,
+the2 native approval queue tests (including failed input persistence), native
+Task/session recovery and native Task-tool discovery. Controller and Matrix
+transport are mocked; these are not new real-model E2E results.
+
 Host tests and the installed-SDK recovery smoke cover these boundaries with
 mocked Controller requests. They do not establish real Task/model continuation,
 ordinary-room message recovery, native sync cursor/backfill integration, the
