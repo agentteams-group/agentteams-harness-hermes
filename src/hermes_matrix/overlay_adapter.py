@@ -277,8 +277,14 @@ class MatrixAdapter(_NativeMatrixAdapter):
             return
         identity = getattr(event, "_agentteams_recovery", None)
         if not identity:
+            delivered = record_delivery
+            if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager" and self._session_receipts:
+                def delivered(result):
+                    record_delivery(result)
+                    if result.success and result.message_id and event.message_id:
+                        self._session_receipts.enqueue(event.source.chat_id, event.message_id, "completed")
             return await super()._send_final_text(event, session_key, text_content, metadata,
-                is_ephemeral_response, ephemeral_ttl, record_delivery)
+                is_ephemeral_response, ephemeral_ttl, delivered)
         from task_recovery import Recovery
         recovery = Recovery(device_delivery=True)
         task_id, team = identity["task_id"], identity["team_id"]
