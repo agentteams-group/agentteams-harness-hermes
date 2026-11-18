@@ -519,8 +519,26 @@ class MatrixAdapter(_NativeMatrixAdapter):
             return await super()._absorb_sync(client, sync_data, initial=initial)
         native = super()._absorb_sync
         cursor = await shared.absorb(sync_data, lambda data: native(client, data, initial=initial))
-        if getattr(self, "_pending_matrix_ready", False):
-            await self._pending_matrix.drain()
+        if initial:
+            # The gateway bounds transport connect to 30s. Its managed sync loop
+            # owns startup recovery and history, and cancels them on disconnect.
+            shared.poll_immediately = True
+            return cursor
+        pending = getattr(self, "_pending_matrix", None)
+        startup = pending is not None and not self._pending_matrix_ready
+        if startup:
+            await self._recover_tasks()
+            await pending.drain()
+            from worker_handoff import recovery_scanned
+            recovery_scanned()
+            await self._report_connected()
+            self._pending_matrix_ready = True
+        if shared.history_pending:
+            from hermes_matrix.sync_history import recover_history
+            for room_id, failure in (await recover_history(shared)).items():
+                logger.warning("Matrix history pending in %s: %s", room_id, failure)
+        if pending is not None and (shared.history_pending or not startup):
+            await pending.drain()
         return cursor
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
@@ -536,23 +554,22 @@ class MatrixAdapter(_NativeMatrixAdapter):
             raise
         if ok and self._client is not None:
             self._wrap_send_message_event()
-            await self._recover_tasks()
-            if getattr(self, "_pending_matrix", None) is not None:
-                self._pending_matrix_ready = True
-                await self._pending_matrix.drain()
-                from worker_handoff import recovery_scanned
-                recovery_scanned()
-            trace_event("runtime.ready", evidence="native_matrix_connect")
-            if os.getenv("AGENTTEAMS_CONTROLLER_URL"):
-                reporter = await asyncio.create_subprocess_exec(
-                    "agt", "worker", "report-ready", "--name",
-                    os.getenv("AGENTTEAMS_WORKER_CR_NAME") or os.environ["AGENTTEAMS_WORKER_NAME"],
-                )
-                if await reporter.wait() != 0:
-                    logger.warning("Controller readiness report failed after Matrix connected")
+            if getattr(self, "_shared_sync", None) is None:
+                await self._recover_tasks()
+                await self._report_connected()
         else:
             trace_event("startup.failed", stage="matrix.connect", error="Native Matrix adapter did not connect")
         return ok
+
+    async def _report_connected(self):
+        trace_event("runtime.ready", evidence="native_matrix_connect")
+        if os.getenv("AGENTTEAMS_CONTROLLER_URL"):
+            reporter = await asyncio.create_subprocess_exec(
+                "agt", "worker", "report-ready", "--name",
+                os.getenv("AGENTTEAMS_WORKER_CR_NAME") or os.environ["AGENTTEAMS_WORKER_NAME"],
+            )
+            if await reporter.wait() != 0:
+                logger.warning("Controller readiness report failed after Matrix connected")
 
     def _is_sender_authorized(self, user_id: str, *args, **kwargs):
         if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":

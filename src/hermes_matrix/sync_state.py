@@ -1,6 +1,5 @@
 """Commit admitted timeline inputs in Matrix order before releasing native work."""
 import asyncio
-import logging
 from contextvars import ContextVar
 
 from mautrix.client.syncer import SyncStream
@@ -45,6 +44,8 @@ class NativeSync:
         self.matrix = WorkerMatrix("hermes", device_delivery=True)
         self.response = self.consumer = self.error = None
         self.initialized = False
+        self.poll_immediately = False
+        self.history_pending = False
         self.dispatch_event = self.client.dispatch_event
 
     def install(self):
@@ -57,7 +58,10 @@ class NativeSync:
                 self.consumer = self.matrix.consumer(snapshot, account=str(self.client.mxid),
                     device=str(self.client.device_id or ""), format="mautrix/sync-v3")
                 kwargs["since"] = self.consumer["token"] or None
+                if self.poll_immediately:
+                    kwargs["timeout"] = 0
                 self.response = await native_sync(*args, **kwargs)
+                self.poll_immediately = False
                 return self.response
             except Exception as error:
                 self.error = error
@@ -158,10 +162,7 @@ class NativeSync:
                 await asyncio.gather(*self.dispatch_event(event, source))
             await self.client.sync_store.put_next_batch(data["next_batch"])
             self.initialized = True
-            if any(room.get("gaps") for room in saved["state"]["rooms"].values()):
-                from hermes_matrix.sync_history import recover_history
-                for room_id, failure in (await recover_history(self)).items():
-                    logging.getLogger(__name__).warning("Matrix history pending in %s: %s", room_id, failure)
+            self.history_pending = any(room.get("gaps") for room in saved["state"]["rooms"].values())
             return data["next_batch"]
         except BaseException as error:
             self.error = error

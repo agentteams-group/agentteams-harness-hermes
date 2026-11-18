@@ -1,8 +1,9 @@
 """Pinned Hermes/mautrix history decoding and policy with fixture HTTP and authority."""
+import asyncio
 import copy
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from mautrix.types import Event
 from hermes_matrix.sync_history import recover_history
@@ -78,6 +79,68 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
         self.page([{**self.message("$new"), "room_id": "!other:test"}])
         assert self.room in await recover_history(self.shared)
         self.matrix.backfill.assert_not_called()
+
+    async def test_initial_sync_commits_gap_without_waiting_for_history_and_disconnect_cancels_it(self):
+        polling_history = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def slow_page(*args, **kwargs):
+            polling_history.set()
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.set()
+
+        # Go retains full pagination bounds when the same gap is ingested
+        # again. The in-memory fixture otherwise replaces the room wholesale.
+        ingest = self.matrix.ingest
+        def retain_gap(snapshot, consumer, inputs, rooms=None):
+            if rooms and self.room in rooms and rooms[self.room].get("gaps"):
+                rooms[self.room]["backfill"] = {"history": self.gap}
+            return ingest(snapshot, consumer, inputs, rooms)
+        self.matrix.ingest = retain_gap
+        self.client.api.request = AsyncMock(side_effect=slow_page)
+        self.native_http.return_value = fixture.response(fixture.event("$retained"), limited=True)
+        first = await self.client.sync(timeout=10000, full_state=True)
+        await asyncio.wait_for(self.adapter._absorb_sync(self.client, first, initial=True), timeout=1)
+        assert await self.client.sync_store.get_next_batch() == "next"
+        assert self.matrix.snapshot["state"]["rooms"][self.room]["gaps"]
+        assert self.admitted == [] and not polling_history.is_set()
+
+        self.native_http.return_value = {"next_batch": "idle"}
+        self.adapter._sync_task = asyncio.create_task(self.adapter._sync_loop())
+        await asyncio.wait_for(polling_history.wait(), timeout=1)
+        assert self.native_http.call_args.kwargs["timeout"] == 0
+        assert self.native_http.call_args.kwargs["since"] == "next"
+        await self.adapter.disconnect()
+        assert cancelled.is_set() and self.adapter._sync_task.done()
+        self.matrix.backfill.assert_not_called()
+        assert not self.admitted
+
+    async def test_managed_ready_waits_for_successful_full_recovery_scan(self):
+        self.adapter._pending_matrix_ready = False
+        self.adapter._pending_matrix = SimpleNamespace(drain=AsyncMock())
+        self.adapter._recover_tasks = AsyncMock(side_effect=[RuntimeError("storage offline"), None])
+        self.page([], end=None)
+        self.native_http.return_value = {"next_batch": "base"}
+        first = await self.client.sync(timeout=10000, full_state=True)
+        await self.adapter._absorb_sync(self.client, first, initial=True)
+        self.adapter._recover_tasks.assert_not_awaited()
+        with patch("worker_handoff.recovery_scanned") as scanned, patch.object(
+            self.adapter, "_report_connected", new_callable=AsyncMock
+        ) as report:
+            with self.assertRaisesRegex(RuntimeError, "storage offline"):
+                await fixture.NativeSyncTests.absorb(self, {"next_batch": "tick"})
+            assert not self.adapter._pending_matrix_ready
+            scanned.assert_not_called()
+            report.assert_not_awaited()
+            await fixture.NativeSyncTests.absorb(self, {"next_batch": "retry"})
+            assert self.adapter._pending_matrix_ready
+            scanned.assert_called_once()
+            report.assert_awaited_once()
+            await fixture.NativeSyncTests.absorb(self, {"next_batch": "later"})
+            scanned.assert_called_once()
+            report.assert_awaited_once()
 
     async def test_absorb_drives_preexisting_history_without_new_room_messages(self):
         self.page([self.message("$offline")], end=None)
