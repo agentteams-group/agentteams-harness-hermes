@@ -30,5 +30,15 @@ native-coordination-smoke:
 	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_coordination_smoke.py
 
 native-recovery-smoke:
+	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_manager_receipt_smoke.py
+	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_ordinary_recovery_smoke.py
+	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_sync_history_smoke.py
+	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_sync_state_smoke.py
+	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_input_commit_smoke.py
+	docker run --rm --entrypoint /opt/venv/hermes/bin/python -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_upgrade_fixture_smoke.py
 	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_recovery_smoke.py
+	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_shared_input_smoke.py
 	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_task_tools_smoke.py
+
+storage-config-smoke:
+	python3 tests/storage_config_smoke.py --image $(IMAGE):$(VERSION)

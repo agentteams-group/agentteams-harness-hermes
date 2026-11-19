@@ -1,14 +1,16 @@
 """
-Bridge: translate openclaw.json (AgentTeams Worker config) into hermes-agent's
-``~/.hermes/`` layout.
+Bridge: project Worker configuration into hermes-agent's ``~/.hermes/`` layout.
+Managed model settings come from the Worker's runtime/runtime.yaml when
+present; openclaw.json remains the compatibility input for other fields and
+for Workers without a managed model record.
 
 Hermes-agent reads its configuration from two main sources, in this order:
 
   1. ``${HERMES_HOME}/.env``        — secrets, MATRIX_*, OPENAI_*, …
   2. ``${HERMES_HOME}/config.yaml`` — model / terminal / platforms / memory
 
-The bridge owns a small, well-defined slice of these files (everything that
-flows from openclaw.json) and leaves all other keys untouched, so users may
+The bridge owns a small, well-defined slice of these files and leaves all
+other keys untouched, so users may
 still customise hermes through the standard ``hermes config`` workflow.
 
 Bridge-owned env keys (always rewritten):
@@ -26,6 +28,7 @@ limits, mcp servers, skills paths) is preserved verbatim.
 """
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import sys
@@ -430,6 +433,31 @@ def bridge_openclaw_to_hermes(
       - Sets ``HERMES_HOME`` env var so subprocesses (mcporter, hermes-cli)
         pick up the same workspace.
     """
+    runtime_path = hermes_home.parent / "runtime/runtime.yaml"
+    runtime = (yaml.safe_load(runtime_path.read_text()) or {}) if runtime_path.is_file() else {}
+    member = runtime.get("member", {})
+    worker_model = runtime.get("desired", {}).get("model") if member.get("runtime") == "hermes" else None
+    if worker_model is not None:
+        credential_env = runtime.get("credentials", {}).get("gatewayKeyEnv", "AGENTTEAMS_WORKER_GATEWAY_KEY")
+        credential = os.getenv(credential_env, "").strip() or str(worker_model.get("gatewayKey") or "").strip()
+        if not credential:
+            raise ValueError("Worker model credential binding is unavailable")
+        if not worker_model.get("model") or not worker_model.get("gatewayUrl"):
+            raise ValueError("Worker model and gateway URL are required")
+        gateway_url = worker_model["gatewayUrl"].rstrip("/")
+        if not gateway_url.endswith("/v1"):
+            gateway_url += "/v1"
+        # The Worker record owns managed model settings. The compatibility
+        # document and native files may still reflect a previous generation.
+        openclaw_cfg = copy.deepcopy(openclaw_cfg)
+        provider = worker_model.get("providerId") or "agentteams-gateway"
+        openclaw_cfg["models"] = {"providers": {provider: {
+            "baseUrl": gateway_url, "apiKey": credential,
+            "models": [{"id": worker_model["model"], "input": worker_model.get("input", ["text"])}],
+        }}}
+        openclaw_cfg.setdefault("agents", {}).setdefault("defaults", {})["model"] = {
+            "primary": provider + "/" + worker_model["model"],
+        }
     hermes_home.mkdir(parents=True, exist_ok=True)
 
     # ── .env ────────────────────────────────────────────────────────────
@@ -447,6 +475,9 @@ def bridge_openclaw_to_hermes(
     ):
         for k, v in source.items():
             merged[k] = v
+    if worker_model is not None:
+        # Legacy pass-through env must not restore a superseded model/key.
+        merged.update(_model_env(openclaw_cfg))
 
     _write_env_file(env_path, merged)
 
@@ -484,6 +515,10 @@ def bridge_openclaw_to_hermes(
         if not isinstance(auxiliary_vision, dict):
             auxiliary_vision = {}
         auxiliary["vision"] = {**auxiliary_vision, **auxiliary_vision_block}
+    elif worker_model is not None:
+        # A text-only Worker model must not retain the previous model's
+        # bridge-owned vision endpoint or secret in the native projection.
+        existing_yaml.get("auxiliary", {}).pop("vision", None)
 
     logging_block = _logging_yaml_block()
     if logging_block:
@@ -533,14 +568,16 @@ def bridge_openclaw_to_hermes(
     # inside the worker container (no docker-in-docker).
     terminal = existing_yaml.setdefault("terminal", {})
     terminal.setdefault("backend", "local")
-    terminal.setdefault("cwd", str(hermes_home))
+    if member.get("runtime") == "hermes":
+        # Shared task/artifact paths belong to the Worker, not the SDK's private
+        # session/config directory or a previous Harness's local setting.
+        terminal["cwd"] = str(hermes_home.parent)
+    else:
+        terminal.setdefault("cwd", str(hermes_home))
 
     # Team Task tools consume the Controller's own role/scope contract. Keep
     # the legacy model/Matrix bridge, but do not infer scope from local Tasks.
-    runtime_path = hermes_home.parent / "runtime/runtime.yaml"
     if runtime_path.is_file():
-        runtime = yaml.safe_load(runtime_path.read_text()) or {}
-        member = runtime.get("member", {})
         if member.get("runtime") == "hermes":
             os.environ["TEAMHARNESS_RUNTIME_CONFIG"] = str(runtime_path)
         if member.get("runtime") == "hermes" and not runtime.get("team", {}).get("name"):

@@ -97,3 +97,49 @@ deterministic fixture so loss of history causes an exact assertion failure.
 ```sh
 python3 tests/upgrade_e2e.py --new-image ghcr.io/agentteams-group/agentteams-harness-hermes:v0.1.0
 ```
+
+## Worker recovery candidate (#1631)
+
+The 1.2.8 candidate requires the pinned Core recovery APIs. Before Matrix
+connect admits new work, it registers the actual Worker start and claims its
+assigned Tasks. Task progress remains authoritative in the Task system.
+Native session reuse reads the common `runtime/sessions/hermes/<work-key>.json`
+descriptor and verifies actual SDK database content, expiry, current checkpoint
+and configuration generation. The former private recovery marker is not used
+as authority. Missing/stale native state creates a fresh session for the same
+Task; unknown side effects remain in verification state. Native `state.db` and
+Matrix crypto backups include committed WAL data. Workspace sync cannot write
+Controller-owned common recovery records.
+
+The candidate now uses Core's `WorkerMatrix.accept` for decoded accepted text,
+media, retained group context, controls and verified Task assignments. Shared
+input persistence precedes native enqueue/history buffering or Task claim;
+authorized approval decisions also wait for their control input to be saved.
+Each callback retains its actual Matrix source timestamp independently of
+overlapping callbacks. Managed Workers suppress the stock mention-time read
+marker; existing custom read receipts still use actual persisted SDK rows.
+The pinned SDK's turn prologue now saves and reads back the actual current user
+row, then commits its common native fact before plugin hooks, compaction or
+inference. It wraps the call site outside the SDK's fail-open plugin dispatcher.
+Missing input, failed/disabled persistence, an old row or failed common CAS
+stops execution. Managed custom read delivery independently waits for that
+matching fact. Startup without a source event does not manufacture read facts.
+This per-event hook does not advance a shared sync cursor; batch/cursor/backfill,
+legacy consumption and ordinary-message execution integration remain open.
+
+Host tests pass57 with1 native-SDK skip. The candidate installed-SDK checks
+pass15 callback/session/direct-control tests, the native decoded-input smoke,
+the2 native approval queue tests (including failed input persistence), native
+Task/session recovery and native Task-tool discovery. Controller and Matrix
+transport are mocked; these are not new real-model E2E results.
+
+Five further native-SDK tests verify actual row IDs/readback, repeated flush
+deduplication, storage/fact failures and a full native turn against a local
+streaming fixture. The native fact precedes compaction and inference, and
+failed CAS permits neither. This test does not establish real Task continuation.
+
+Host tests and the installed-SDK recovery smoke cover these boundaries with
+mocked Controller requests. They do not establish real Task/model continuation,
+ordinary-room message recovery, native sync cursor/backfill integration, the
+complete fault suite or cross-Harness switching. Those remain tracked in
+[AgentTeams #1631](https://github.com/agentscope-ai/AgentTeams/issues/1631).

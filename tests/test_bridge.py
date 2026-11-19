@@ -73,6 +73,7 @@ def test_team_task_tools_use_projected_scope_and_actual_process(tmp_path, monkey
     assert server["env"]["AGENTTEAMS_PROCESS_ID"] == "actual-start"
     assert server["env"]["AGENTTEAMS_AGENT_ROLE"] == "worker"
     assert server["env"]["TEAMHARNESS_RUNTIME_CONFIG"] == str(runtime)
+
     assert bridge_module.os.environ["TEAMHARNESS_RUNTIME_CONFIG"] == str(runtime)
     assert server["env"]["TEAMHARNESS_SHARED_DIR"] == str(tmp_path / "shared")
     config["mcp_servers"]["custom"] = {"command": "custom-mcp"}
@@ -82,6 +83,19 @@ def test_team_task_tools_use_projected_scope_and_actual_process(tmp_path, monkey
     config = yaml.safe_load((home / "config.yaml").read_text())
     assert "teamharness" not in config["mcp_servers"]
     assert config["mcp_servers"]["custom"] == {"command": "custom-mcp"}
+
+
+def test_managed_terminal_uses_worker_workspace_instead_of_private_runtime_directory(tmp_path):
+    runtime = tmp_path / "runtime/runtime.yaml"
+    runtime.parent.mkdir()
+    runtime.write_text(yaml.safe_dump({"member": {"runtime": "hermes", "role": "worker"}}))
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    (home / "config.yaml").write_text(yaml.safe_dump({"terminal": {"cwd": "/old-harness/private", "timeout": 123}}))
+    bridge_openclaw_to_hermes(_make_openclaw_cfg(vision=False), home)
+    terminal = yaml.safe_load((home / "config.yaml").read_text())["terminal"]
+    assert terminal["cwd"] == str(tmp_path)
+    assert terminal["timeout"] == 123
 
 
 def test_manager_role_is_bound_to_native_system_prompt(tmp_path, monkeypatch):

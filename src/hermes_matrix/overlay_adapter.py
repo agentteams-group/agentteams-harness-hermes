@@ -37,6 +37,7 @@ from hermes_matrix.policies import (
 
 logger = logging.getLogger(__name__)
 _coordination_turn = ContextVar("agentteams_task_notification", default=False)
+_matrix_source_event = ContextVar("agentteams_matrix_source", default=None)
 try:
     from runtime_observability import event as trace_event
 except ImportError:
@@ -124,37 +125,51 @@ class MatrixAdapter(_NativeMatrixAdapter):
         self._dashboard_approvals = MatrixApprovals(self._send_dashboard_approval)
         self._recovered_admissions = set()
         self._task_recovery_lock = asyncio.Lock()
+        if os.getenv("AGENTTEAMS_CONTROLLER_URL") and os.getenv("AGENTTEAMS_PROCESS_ID"):
+            from hermes_matrix.input_commit import install_native_input_guard
+            install_native_input_guard()
 
-    async def _recover_tasks(self, only_task=None, *, claim_only=False, source_event=None):
+    async def _recover_tasks(self, only_task=None, *, only_team=None, claim_only=False, source_event=None):
         if not os.getenv("AGENTTEAMS_CONTROLLER_URL") or not os.getenv("AGENTTEAMS_PROCESS_ID"):
             return
         from task_recovery import Recovery, enabled
         if not enabled():
             return
         async with self._task_recovery_lock:
-            await self._recover_tasks_serial(only_task, claim_only=claim_only, source_event=source_event)
+            await self._recover_tasks_serial(only_task, only_team=only_team, claim_only=claim_only, source_event=source_event)
 
-    async def _recover_tasks_serial(self, only_task, *, claim_only, source_event):
-        from task_recovery import Recovery
-        recovery = Recovery()
+    async def _recover_tasks_serial(self, only_task, *, only_team, claim_only, source_event):
+        from task_recovery import Recovery, RecoveryConflict
+        from worker_matrix_state import WorkerMatrix
+        from worker_sessions import WorkerSessions
+        from hermes_matrix.session_cache import session_fingerprint
+        recovery = Recovery(device_delivery=True)
+        await asyncio.to_thread(WorkerMatrix("hermes", recovery=recovery).start)
+        sessions = WorkerSessions("hermes", recovery=recovery)
         snapshot = await asyncio.to_thread(recovery.discover)
         from gateway.platforms.event import MessageEvent
-        from mautrix.types import EventType, RoomID
         for entry in snapshot["tasks"]:
             task_id, team = entry["task"]["task_id"], entry["team_id"]
             if only_task is not None and task_id != only_task:
+                continue
+            if only_team is not None and team != only_team:
+                continue
+            if source_event and entry["task"].get("room_id") != str(source_event.room_id):
                 continue
             claimed = await asyncio.to_thread(recovery.claim, snapshot, entry)
             if claim_only:
                 continue
             task = claimed["task"]
+            if task["execution"]["state"] == "needs_verification":
+                trace_event("task.recovery.verify", task_id=task_id, team_id=team,
+                    generation=task["execution"]["generation"])
+                continue
             admission = (team, task_id, task["execution"]["generation"])
             cp = task["execution"].get("checkpoint") or {}
             room = task["room_id"]
             if cp.get("delivery") == "pending":
-                result = await self._client.send_message_event(RoomID(room), EventType.ROOM_MESSAGE,
-                    {"msgtype": "m.text", "body": claimed["saved_result"], "org.agentteams.progress_only": True},
-                    txn_id=cp["reply_txn"])
+                from hermes_matrix.saved_reply import task_reply
+                result = await task_reply(self, recovery, task_id, team, room, claimed, claimed["saved_result"])
                 await asyncio.to_thread(recovery.delivered, task_id, team, str(result))
                 task = await asyncio.to_thread(recovery.current, task_id, team)
                 if task is None:
@@ -167,31 +182,31 @@ class MatrixAdapter(_NativeMatrixAdapter):
             if runner is None or getattr(runner, "session_store", None) is None:
                 raise RuntimeError("native Hermes session store is unavailable for Task recovery")
             store = runner.session_store
+            work = {"kind": "task", "team_id": team, "task_id": task_id}
+            view = await asyncio.to_thread(sessions.load, work)
+            if view["generation"] != task["execution"]["generation"] or view["checkpoint_digest"] != recovery.digest(task["execution"].get("checkpoint")):
+                raise RecoveryConflict("Task checkpoint advanced before native session selection")
+            descriptor = view["cache"] or {}
             cached = next((session for session in await asyncio.to_thread(store.list_sessions)
-                if session.metadata.get("agentteams_recovery", {}).get("task") == [team, task_id]
-                and recovery.session_usable(session.metadata["agentteams_recovery"], task, "hermes")), None)
+                if session.session_id == descriptor.get("native_ref")), None)
+            digest = await asyncio.to_thread(session_fingerprint, store, cached)
+            if not sessions.usable(view, cached.session_id if cached else None, digest):
+                cached = None
             # Recovery is a trusted local admission, never a forged Matrix
             # source event or a migrated foreign native session.
             event = MessageEvent(text=recovery.resume_text({**task, "team_id": team, "spec": claimed["spec"]}),
                 source=self.build_source(chat_id=room, chat_type="group",
                     user_id=str(source_event.sender if source_event else
-                        cached.metadata["agentteams_recovery"]["source_user_id"] if cached else self._user_id)),
+                        cached.origin.user_id if cached and cached.origin else self._user_id)),
                 message_id=str(source_event.event_id) if source_event else "recovery:"+team+"/"+task_id+":"+str(task["execution"]["generation"]), raw_message={},
                 internal=True, allow_gateway_control=False)
-            event._agentteams_recovery = {"task_id": task_id, "team_id": team, "generation": task["execution"]["generation"]}
+            event._agentteams_recovery = {"task_id": task_id, "team_id": team,
+                **{key: task["execution"][key] for key in ("generation", "instance_id", "process_id")}}
             session_key = runner._session_key_for_source(event.source)
             if runner._is_session_running(session_key) or session_key in self._active_sessions:
                 raise RuntimeError("native Hermes session is busy; Task recovery must wait")
             current = await asyncio.to_thread(store.lookup_by_session_key, session_key)
             reuse = bool(cached and current and current.session_id == cached.session_id)
-            if reuse:
-                try:
-                    db = store._db_for_key(session_key)
-                    row = await asyncio.to_thread(db.get_session, cached.session_id) if db else None
-                    reuse = bool(row and row.get("end_reason") is None)
-                except Exception:
-                    # An unreadable native cache is never recovery authority.
-                    reuse = False
             # The SDK also checks its own expiration and persisted session row.
             # Only a matching shared checkpoint permits attempting native reuse.
             session = await asyncio.to_thread(store.get_or_create_session,
@@ -204,42 +219,127 @@ class MatrixAdapter(_NativeMatrixAdapter):
             trace_event("task.recovery.session", task_id=task_id, team_id=team,
                 generation=task["execution"]["generation"], session_id=session.session_id,
                 checkpoint_version=cp.get("version", 0), reused=bool(reuse and session.session_id == cached.session_id))
+            current = await asyncio.to_thread(recovery.current, task_id, team)
+            if (not self._owns_recovery(current, event._agentteams_recovery, recovery.process)
+                    or recovery.digest(current["execution"].get("checkpoint")) != view["checkpoint_digest"]):
+                raise RuntimeError("Task execution changed before native recovery admission")
             await self.handle_message(event)
             if not getattr(event, "_gateway_accepted", False):
                 raise RuntimeError("native Hermes gateway did not admit recovered Task")
             self._recovered_admissions.add(admission)
 
+    @staticmethod
+    def _owns_recovery(task, identity, process, *, delivery=False):
+        execution = task.get("execution", {}) if task else {}
+        return bool(task and task["status"] in {"in_progress", "assigned", "submitted"}
+            and execution.get("runtime") == "hermes"
+            and execution.get("state") in ({"active", "released"} if delivery else {"active"})
+            and identity["process_id"] == process
+            and all(execution.get(key) == identity[key] for key in ("generation", "instance_id", "process_id")))
+
+    async def _remember_task_session(self, recovery, identity, saved, session_key):
+        from worker_sessions import WorkerSessions
+        from task_recovery import RecoveryConflict, RecoveryUnavailable
+        from hermes_matrix.session_cache import session_fingerprint
+        if saved.get("task", {}).get("status") == "submitted":
+            return
+        runner = getattr(self._message_handler, "__self__", None)
+        store = runner.session_store if runner else None
+        entry = await asyncio.to_thread(store.lookup_by_session_key, session_key) if store else None
+        if not entry or entry.session_id != identity["session_id"]:
+            return
+        try:
+            sessions = WorkerSessions("hermes", recovery=recovery)
+            work = {"kind": "task", "team_id": identity["team_id"], "task_id": identity["task_id"]}
+            view = await asyncio.to_thread(sessions.load, work)
+            if view["checkpoint_digest"] != recovery.digest(saved["execution"]["checkpoint"]):
+                return # Do not relabel old native content with a newer checkpoint.
+            digest = await asyncio.to_thread(session_fingerprint, store, entry)
+            if not digest:
+                return
+            expires = int(time.time()) + 86400
+            await asyncio.to_thread(sessions.remember, work, view, identity, entry.session_id, digest, expires)
+            trace_event("task.recovery.cache", task_id=identity["task_id"], team_id=identity["team_id"],
+                session_id=entry.session_id, native_digest=digest, expires_at=expires,
+                checkpoint_digest=view["checkpoint_digest"])
+        except (RecoveryConflict, RecoveryUnavailable) as exc:
+            # Delivery already committed; an optional stale/unavailable cache
+            # must rebuild on restart rather than replace the saved reply.
+            trace_event("task.recovery.cache_skipped", task_id=identity["task_id"], error_type=type(exc).__name__)
+
     async def _send_final_text(self, event, session_key, text_content, metadata,
                                is_ephemeral_response, ephemeral_ttl, record_delivery):
+        ordinary = getattr(event, "_agentteams_message", None)
+        if ordinary:
+            saved = await asyncio.to_thread(ordinary.matrix.message_save_reply, ordinary.identity, text_content)
+            reply_id = await self._pending_matrix.deliver(saved)
+            record_delivery(types.SimpleNamespace(success=True, message_id=reply_id))
+            return
         identity = getattr(event, "_agentteams_recovery", None)
         if not identity:
+            delivered = record_delivery
+            if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager" and self._session_receipts:
+                def delivered(result):
+                    record_delivery(result)
+                    if result.success and result.message_id and event.message_id:
+                        self._session_receipts.enqueue(event.source.chat_id, event.message_id, "completed")
             return await super()._send_final_text(event, session_key, text_content, metadata,
-                is_ephemeral_response, ephemeral_ttl, record_delivery)
+                is_ephemeral_response, ephemeral_ttl, delivered)
         from task_recovery import Recovery
-        from mautrix.types import EventType, RoomID
-        recovery = Recovery()
+        recovery = Recovery(device_delivery=True)
         task_id, team = identity["task_id"], identity["team_id"]
+        from task_recovery import RecoveryConflict
+        current = await asyncio.to_thread(recovery.current, task_id, team)
+        if not self._owns_recovery(current, identity, recovery.process, delivery=True):
+            raise RecoveryConflict("Native Task final callback was replaced or cancelled")
         saved, text_content = await asyncio.to_thread(recovery.prepare_reply, task_id, team, text_content)
         cp = saved["execution"]["checkpoint"]
         if cp.get("delivery") == "delivered":
             record_delivery(types.SimpleNamespace(success=True, message_id=cp["reply_event"]))
             return
-        result = await self._client.send_message_event(RoomID(event.source.chat_id), EventType.ROOM_MESSAGE,
-            {"msgtype": "m.text", "body": text_content, "org.agentteams.progress_only": True}, txn_id=cp["reply_txn"])
+        from hermes_matrix.saved_reply import task_reply
+        result = await task_reply(self, recovery, task_id, team, event.source.chat_id, saved, text_content)
         saved = await asyncio.to_thread(recovery.delivered, task_id, team, str(result))
-        runner = getattr(self._message_handler, "__self__", None)
-        session = runner.session_store.lookup_by_session_key(session_key) if runner else None
-        if session and session.session_id == identity["session_id"]:
-            marker = {
-                "task": [team, task_id], "runtime": "hermes", "source_user_id": event.source.user_id,
-                "expires_at": time.time() + 86400,
-                "checkpoint_digest": recovery.digest(saved["execution"]["checkpoint"])}
-            if await asyncio.to_thread(runner.session_store.set_session_metadata, session_key, "agentteams_recovery", marker):
-                trace_event("task.recovery.cache", task_id=task_id, team_id=team, session_id=session.session_id,
-                    expires_at=marker["expires_at"], checkpoint_digest=marker["checkpoint_digest"])
         record_delivery(types.SimpleNamespace(success=True, message_id=str(result)))
+        # The pinned SDK persists its final transcript before this send hook.
+        await self._remember_task_session(recovery, identity, saved, session_key)
+
+    async def _accept_matrix_input(self, room, sender, event_id, content, intent, *, task_id=None):
+        from task_recovery import enabled
+        if not enabled():
+            return
+        from worker_matrix_state import WorkerMatrix
+        source = _matrix_source_event.get()
+        decoded = {"sender": sender, "type": "m.room.message",
+            "origin_server_ts": int(getattr(source, "timestamp", 0) or 0), "content": content}
+        shared = getattr(self, "_shared_sync", None)
+        if shared is not None:
+            from hermes_matrix.sync_state import current_admission
+            admission = current_admission()
+            if admission is not None:
+                return await admission.retain(shared.matrix, room, event_id, decoded, intent, task_id)
+        async with self._task_recovery_lock:
+            return await asyncio.to_thread(WorkerMatrix("hermes").accept,
+                room, event_id, decoded, intent, task_id=task_id)
 
     async def _on_room_message(self, event):
+        token = _matrix_source_event.set(event)
+        error = None
+        try:
+            return await self._on_matrix_input(event)
+        except Exception as exc:
+            error = exc
+            raise
+        finally:
+            if getattr(self, "_shared_sync", None) is not None:
+                from hermes_matrix.sync_state import current_admission
+                admission = current_admission()
+                if admission is not None:
+                    admission.error = error
+                    admission.ready.set()
+            _matrix_source_event.reset(token)
+
+    async def _on_matrix_input(self, event):
         content = getattr(event, "content", None)
         content = content if isinstance(content, dict) else content.serialize() if hasattr(content, "serialize") else {}
         if "org.agentteams.coordination" not in content and content.get("org.agentteams.progress_only") is not True:
@@ -257,8 +357,11 @@ class MatrixAdapter(_NativeMatrixAdapter):
             # Retain this verified Matrix source when its Task input enters
             # the native session. Startup-only recovery has no source event
             # and must never manufacture a Matrix read receipt.
+            await self._accept_matrix_input(str(event.room_id), str(event.sender), str(event.event_id),
+                content, "task_notification", task_id=canonical["task_id"])
             await self._recover_tasks(canonical["task_id"], source_event=event)
             return
+        await self._accept_matrix_input(str(event.room_id), str(event.sender), str(event.event_id), content, "control")
         # The receipt admits the Leader's self-addressed closure without
         # weakening the native own-echo policy for ordinary messages.
         # A real Matrix event starts the native thread/session. Keep opaque
@@ -296,6 +399,18 @@ class MatrixAdapter(_NativeMatrixAdapter):
         })
 
     async def _process_message_background(self, event, session_key):
+        ordinary = getattr(event, "_agentteams_message", None)
+        if not ordinary:
+            return await self._process_managed_message(event, session_key)
+        from hermes_matrix.message_execution import ordinary_turn
+        scope = ordinary_turn.set(ordinary)
+        try:
+            return await self._process_managed_message(event, session_key)
+        finally:
+            ordinary_turn.reset(scope)
+            self._pending_matrix.running.discard(ordinary.identity["event_key"])
+
+    async def _process_managed_message(self, event, session_key):
         if "org.agentteams.coordination" in (event.raw_message or {}) or getattr(event, "_agentteams_recovery", None):
             token = _coordination_turn.set(True)
             try:
@@ -323,6 +438,14 @@ class MatrixAdapter(_NativeMatrixAdapter):
             await self._execution_status(run, "stopped" if run["stopped"] else status)
 
     async def handle_message(self, event):
+        if getattr(self, "_pending_matrix", None) is not None and not getattr(event, "_agentteams_message", None):
+            from hermes_matrix.sync_state import current_admission
+            from worker_matrix_state import matrix_event_key
+            admission = current_admission()
+            item = admission.item if admission is not None else None
+            if item and item["intent"] == "message" and item["event_id"] == event.message_id:
+                self._pending_matrix.live[matrix_event_key(item["room_id"], event.message_id)] = event
+                return
         raw = event.raw_message
         control = raw.get("com.agentteams.control") if isinstance(raw, dict) else None
         if not isinstance(raw, dict) or "com.agentteams.control" not in raw:
@@ -370,6 +493,60 @@ class MatrixAdapter(_NativeMatrixAdapter):
         result = await self._dashboard_approvals.prompt(prompt)
         return result if result is not None else await super()._send_exec_approval_prompt(prompt)
 
+    async def _connect_initial_sync(self, client):
+        if not os.getenv("AGENTTEAMS_CONTROLLER_URL") or not os.getenv("AGENTTEAMS_PROCESS_ID"):
+            return await super()._connect_initial_sync(client)
+        from task_recovery import enabled
+        if not enabled():
+            return await super()._connect_initial_sync(client)
+        from hermes_matrix.sync_state import NativeSync
+        from hermes_matrix.message_execution import PendingInputs, install_ordinary_guard
+        install_ordinary_guard()
+        self._shared_sync = NativeSync(self, client)
+        self._pending_matrix = PendingInputs(self, self._shared_sync.matrix)
+        self._pending_matrix_ready = False
+        # Each source event has its own execution and reply transaction.
+        self._text_batch_delay_seconds = 0
+        self._shared_sync.install()
+        # The shared timeline cursor includes messages received while offline.
+        # The SDK's five-second startup cutoff would discard those messages.
+        self._startup_ts = 0
+        await super()._connect_initial_sync(client)
+        # The native initial-sync helper logs and suppresses errors. A failed
+        # shared commit must not be advertised as successful startup.
+        if self._shared_sync.error is not None:
+            raise self._shared_sync.error
+        if not self._shared_sync.initialized:
+            raise RuntimeError("No committed Matrix response on initial sync")
+
+    async def _absorb_sync(self, client, sync_data, *, initial=False):
+        shared = getattr(self, "_shared_sync", None)
+        if shared is None:
+            return await super()._absorb_sync(client, sync_data, initial=initial)
+        native = super()._absorb_sync
+        cursor = await shared.absorb(sync_data, lambda data: native(client, data, initial=initial))
+        if initial:
+            # The gateway bounds transport connect to 30s. Its managed sync loop
+            # owns startup recovery and history, and cancels them on disconnect.
+            shared.poll_immediately = True
+            return cursor
+        pending = getattr(self, "_pending_matrix", None)
+        startup = pending is not None and not self._pending_matrix_ready
+        if startup:
+            await self._recover_tasks()
+            await pending.drain()
+            from worker_handoff import recovery_scanned
+            recovery_scanned()
+            await self._report_connected()
+            self._pending_matrix_ready = True
+        if shared.history_pending:
+            from hermes_matrix.sync_history import recover_history
+            for room_id, failure in (await recover_history(shared)).items():
+                logger.warning("Matrix history pending in %s: %s", room_id, failure)
+        if pending is not None and (shared.history_pending or not startup):
+            await pending.drain()
+        return cursor
+
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         trace_event("startup.stage", stage="matrix.connect")
         try:
@@ -383,18 +560,22 @@ class MatrixAdapter(_NativeMatrixAdapter):
             raise
         if ok and self._client is not None:
             self._wrap_send_message_event()
-            await self._recover_tasks()
-            trace_event("runtime.ready", evidence="native_matrix_connect")
-            if os.getenv("AGENTTEAMS_CONTROLLER_URL"):
-                reporter = await asyncio.create_subprocess_exec(
-                    "agt", "worker", "report-ready", "--name",
-                    os.getenv("AGENTTEAMS_WORKER_CR_NAME") or os.environ["AGENTTEAMS_WORKER_NAME"],
-                )
-                if await reporter.wait() != 0:
-                    logger.warning("Controller readiness report failed after Matrix connected")
+            if getattr(self, "_shared_sync", None) is None:
+                await self._recover_tasks()
+                await self._report_connected()
         else:
             trace_event("startup.failed", stage="matrix.connect", error="Native Matrix adapter did not connect")
         return ok
+
+    async def _report_connected(self):
+        trace_event("runtime.ready", evidence="native_matrix_connect")
+        if os.getenv("AGENTTEAMS_CONTROLLER_URL"):
+            reporter = await asyncio.create_subprocess_exec(
+                "agt", "worker", "report-ready", "--name",
+                os.getenv("AGENTTEAMS_WORKER_CR_NAME") or os.environ["AGENTTEAMS_WORKER_NAME"],
+            )
+            if await reporter.wait() != 0:
+                logger.warning("Controller readiness report failed after Matrix connected")
 
     def _is_sender_authorized(self, user_id: str, *args, **kwargs):
         if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
@@ -465,7 +646,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
         if not self._dual_allow.permits(sender, is_dm=is_dm):
             return None
 
-        if await self._dashboard_approvals.answer(room_id, sender, body):
+        if await self._dashboard_approvals.answer(room_id, sender, body,
+                before_answer=lambda: self._accept_matrix_input(room_id, sender, event_id, source_content, "control")):
             return None
 
         ctx = await super()._resolve_message_context(
@@ -480,10 +662,14 @@ class MatrixAdapter(_NativeMatrixAdapter):
         )
         if ctx is None:
             if not is_dm:
+                await self._accept_matrix_input(room_id, sender, event_id, source_content, "context")
                 display = await self._get_display_name(room_id, sender)
                 history_body = _describe_dropped_media(source_content, body)
                 self._history.record(room_id, display, history_body, event_id)
             return None
+
+        intent = "control" if (_is_commandish(body) or "com.agentteams.control" in source_content) else "message"
+        await self._accept_matrix_input(room_id, sender, event_id, source_content, intent)
 
         trace_event("message.received", room_id=room_id, event_id=event_id, sender=sender)
         body, is_dm, chat_type, thread_id, display_name, source = ctx
@@ -504,6 +690,13 @@ class MatrixAdapter(_NativeMatrixAdapter):
             if self._session_receipts:
                 await asyncio.to_thread(self._session_receipts.link, room_id, event_id, history_ids)
         return body, is_dm, chat_type, thread_id, display_name, source
+
+    def _background_read_receipt(self, room_id, event_id):
+        from task_recovery import enabled
+        if not enabled():
+            return super()._background_read_receipt(room_id, event_id)
+        # Native mention gating precedes input admission and persistence.
+        # Managed reads come from actual persisted SDK rows, never this gate.
 
     async def _handle_media_message(
         self,

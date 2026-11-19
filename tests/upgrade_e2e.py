@@ -88,7 +88,10 @@ async def fixture():
         users = "\n".join(str(m.get("content", "")) for m in messages if m.get("role") == "user")
         seed = re.search(r"UPGRADE_SEED:([a-z0-9]+)", users)
         nonce = re.findall(r"UPGRADE_RECALL:([a-z0-9]+)", users)
-        text = ("RESUMED:" + seed[1] + ":" + nonce[-1]) if nonce and seed else (
+        # A hex seed ending in 8+ digits followed by ':' and a nonce matches
+        # the native Telegram-token scrubber. Keep synthetic history evidence
+        # outside credential syntax without disabling egress protection.
+        text = ("RESUMED:" + seed[1] + "|" + nonce[-1]) if nonce and seed else (
             "SEEDED:" + seed[1] if seed else "MISSING_UPGRADE_HISTORY")
         calls.append({"reply": text, "history_found": bool(seed), "messages": len(messages)})
         common = {"id": "chatcmpl-upgrade", "created": int(time.time()), "model": payload.get("model", "upgrade-model")}
@@ -280,7 +283,7 @@ def run(args):
                 assert before[key] == after[key], f"lost {key}"
             for room, secret in zip(rooms, secrets):
                 nonce = uuid.uuid4().hex
-                send_and_wait(room, "UPGRADE_RECALL:" + nonce, "RESUMED:" + secret + ":" + nonce)
+                send_and_wait(room, "UPGRADE_RECALL:" + nonce, "RESUMED:" + secret + "|" + nonce)
             print("PASS: upgraded Worker continued both old sessions", flush=True)
             idle("new")
             middle = capture("new")
@@ -290,7 +293,7 @@ def run(args):
             ready("new")
             for room, secret in zip(rooms, secrets):
                 nonce = uuid.uuid4().hex
-                send_and_wait(room, "UPGRADE_RECALL:" + nonce, "RESUMED:" + secret + ":" + nonce)
+                send_and_wait(room, "UPGRADE_RECALL:" + nonce, "RESUMED:" + secret + "|" + nonce)
             print("PASS: second restart continued both sessions", flush=True)
             idle("new")
             final = capture("new")

@@ -57,7 +57,7 @@ class MatrixApprovals:
         event_id = await self.send(prompt.chat_id, prompt.text, data)
         return SendResult(success=True, message_id=str(event_id))
 
-    async def answer(self, room_id, sender, body):
+    async def answer(self, room_id, sender, body, *, before_answer=None):
         match = COMMAND.fullmatch(re.sub(r"^(?:@\S+\s+)+", "", body.strip()))
         if not match:
             return False
@@ -73,6 +73,8 @@ class MatrixApprovals:
         admin = admin_name if admin_name.startswith("@") else f"@{admin_name}:{domain}" if admin_name and domain else None
         if requester and sender not in {requester, admin}:
             return True
+        if before_answer is not None:
+            await before_answer()
         from tools.approval import resolve_gateway_approval_card
         entry["decision"] = "approved" if action == "approve" else "rejected"
         if not resolve_gateway_approval_card(

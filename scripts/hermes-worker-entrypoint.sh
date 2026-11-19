@@ -151,5 +151,5 @@ CMD_ARGS=(
 )
 
 export PYTHONPATH="/opt/agentteams/scripts/lib${PYTHONPATH:+:${PYTHONPATH}}"
-python3 /opt/agentteams/scripts/lib/agentteams_receipts.py serve --runtime hermes --workspace "${WORKSPACE}" &
+"${VENV}/bin/python" /opt/agentteams/scripts/lib/agentteams_receipts.py serve --runtime hermes --workspace "${WORKSPACE}" &
 exec "${VENV}/bin/hermes-worker" "${CMD_ARGS[@]}"
