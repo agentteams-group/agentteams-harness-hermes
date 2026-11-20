@@ -99,6 +99,18 @@ class PendingInputs:
                 if entry["intent"] == "context":
                     history.setdefault(room, []).append(entry)
                     continue
+                if entry["intent"] == "control":
+                    if (key not in self.running and not entry.get("native_commit")
+                            and not snapshot["state"].get("rooms", {}).get(room, {}).get("gaps")):
+                        try:
+                            if joined is None:
+                                joined = set(await self.adapter._client.get_joined_rooms())
+                            if room not in joined:
+                                continue
+                            await self.resume_control(key, entry)
+                        except Exception as exc:
+                            logger.warning("Matrix control %s remains pending (%s)", key, type(exc).__name__)
+                    continue
                 if entry["intent"] not in {"message", "task_notification"}:
                     continue
                 try:
@@ -133,6 +145,24 @@ class PendingInputs:
                 except Exception as exc:
                     busy.add(room)
                     logger.warning("Matrix work %s remains pending (%s)", key, type(exc).__name__)
+
+    async def resume_control(self, key, entry):
+        from task_coordination import IgnoredNotification, notification
+        source = entry["input"]
+        if "org.agentteams.coordination" not in source["content"]:
+            return
+        try:
+            packet = await asyncio.to_thread(notification, source["content"], entry["room_id"],
+                source["sender"], str(self.adapter._user_id))
+        except IgnoredNotification:
+            return
+        if not packet or packet["meta"]["teamharness_coordination"]["kind"] == "task_assigned":
+            return
+        if not await self.adapter._is_allowed_matrix_room_event(entry["room_id"]):
+            return
+        event = SimpleNamespace(room_id=entry["room_id"], event_id=entry["event_id"], sender=source["sender"], content=source["content"])
+        if await self.adapter._dispatch_coordination(event, packet):
+            self.running.add(key)
 
     async def resume_assignment(self, entry):
         # A limited batch may have withheld native admission after the source
