@@ -128,6 +128,10 @@ def test_team_member_waits_for_complete_runtime_scope_before_native_boot(tmp_pat
               "desired": {"model": {"model": "model", "gatewayUrl": "https://gateway.test/v1"}}}
     monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "test-bound-token")
     monkeypatch.setattr(sync, "_cat", lambda key: yaml.safe_dump(record) if key.endswith("runtime.yaml") else None)
+    if role == "worker":
+        # A standalone Worker has no Team to wait for.
+        assert sync.get_config()["channels"]["matrix"]["userId"] == "@worker:test"
+        record["team"] = {}
     with pytest.raises(ValueError, match="Team scope"):
         sync.get_config()
     record["team"] = {"name": "team-a"}
