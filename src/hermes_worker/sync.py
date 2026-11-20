@@ -386,6 +386,12 @@ class FileSync:
         transport = runtime.get("matrix", {}).get("transport")
         if transport is not None and runtime.get("member", {}).get("runtime") == "hermes":
             member = runtime["member"]
+            if (member.get("role") in {"leader", "team_leader"}
+                    or (member.get("role") == "worker" and "team" in runtime)) and not (runtime.get("team") or {}).get("name"):
+                # Team membership can be projected before its full scope.
+                # Let the existing startup retry pull the complete snapshot
+                # instead of booting a gateway without TeamHarness tools.
+                raise ValueError("Worker Team scope is not ready")
             token_env = runtime.get("credentials", {}).get("matrixTokenEnv", "AGENTTEAMS_WORKER_MATRIX_TOKEN")
             token = os.getenv(token_env, "").strip() or str(runtime.get("matrix", {}).get("accessToken") or "").strip()
             if not token:

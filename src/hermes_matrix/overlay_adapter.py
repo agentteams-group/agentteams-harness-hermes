@@ -362,6 +362,12 @@ class MatrixAdapter(_NativeMatrixAdapter):
             await self._recover_tasks(canonical["task_id"], source_event=event)
             return
         await self._accept_matrix_input(str(event.room_id), str(event.sender), str(event.event_id), content, "control")
+        if await self._dispatch_coordination(event, packet):
+            from worker_matrix_state import matrix_event_key
+            if getattr(self, "_pending_matrix", None) is not None:
+                self._pending_matrix.running.add(matrix_event_key(str(event.room_id), str(event.event_id)))
+
+    async def _dispatch_coordination(self, event, packet):
         # The receipt admits the Leader's self-addressed closure without
         # weakening the native own-echo policy for ordinary messages.
         # A real Matrix event starts the native thread/session. Keep opaque
@@ -369,8 +375,11 @@ class MatrixAdapter(_NativeMatrixAdapter):
         source = self.build_source(chat_id=str(event.room_id), chat_type="group",
             user_id=str(event.sender), thread_id=str(event.event_id))
         from gateway.platforms.event import MessageEvent
-        await self.handle_message(MessageEvent(text=packet["text"], source=source,
-            message_id=str(event.event_id), raw_message=content))
+        content = event.content if isinstance(event.content, dict) else event.content.serialize()
+        message = MessageEvent(text=packet["text"], source=source,
+            message_id=str(event.event_id), raw_message=content)
+        await self.handle_message(message)
+        return getattr(message, "_gateway_accepted", False)
 
     async def _direct_member(self, event) -> bool:
         if not event.source or not event.message_id or not self._client:
@@ -417,6 +426,9 @@ class MatrixAdapter(_NativeMatrixAdapter):
                 return await super()._process_message_background(event, session_key)
             finally:
                 _coordination_turn.reset(token)
+                if getattr(self, "_pending_matrix", None) is not None:
+                    from worker_matrix_state import matrix_event_key
+                    self._pending_matrix.running.discard(matrix_event_key(event.source.chat_id, event.message_id))
         if not await self._direct_member(event):
             return await super()._process_message_background(event, session_key)
         room = event.source.chat_id

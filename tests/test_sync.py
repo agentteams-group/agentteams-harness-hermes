@@ -119,6 +119,26 @@ def test_projected_task_scope_wins_over_old_local_team_context(tmp_path):
     assert sync._get_team_id() is None
 
 
+@pytest.mark.parametrize("role", ["team_leader", "worker"])
+def test_team_member_waits_for_complete_runtime_scope_before_native_boot(tmp_path, monkeypatch, role):
+    sync = FileSync(endpoint="http://minio:9000", access_key="test", secret_key="test",
+                    bucket="test", worker_name="worker", local_dir=tmp_path)
+    record = {"member": {"runtime": "hermes", "role": role, "matrixUserId": "@worker:test"},
+              "matrix": {"transport": {"homeserver": "https://matrix.test"}},
+              "desired": {"model": {"model": "model", "gatewayUrl": "https://gateway.test/v1"}}}
+    monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "test-bound-token")
+    monkeypatch.setattr(sync, "_cat", lambda key: yaml.safe_dump(record) if key.endswith("runtime.yaml") else None)
+    if role == "worker":
+        # A standalone Worker has no Team to wait for.
+        assert sync.get_config()["channels"]["matrix"]["userId"] == "@worker:test"
+        record["team"] = {}
+    with pytest.raises(ValueError, match="Team scope"):
+        sync.get_config()
+    record["team"] = {"name": "team-a"}
+    assert sync.get_config()["channels"]["matrix"]["userId"] == "@worker:test"
+    assert yaml.safe_load((tmp_path / "runtime/runtime.yaml").read_text())["team"]["name"] == "team-a"
+
+
 def test_manager_role_projection_does_not_overwrite_personality(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "manager")
     sync = FileSync(endpoint="http://minio:9000", access_key="test", secret_key="test",

@@ -105,6 +105,40 @@ class OrdinaryTests(unittest.IsolatedAsyncioTestCase):
             self.adapter._recover_tasks.assert_awaited_once()
         self.client.send_message_event.assert_not_awaited()
 
+    async def test_empty_sync_resumes_pending_leader_control_once_after_gap_closes(self):
+        self.adapter._user_id = "@worker:test"
+        self.adapter._dispatch_coordination = AsyncMock(return_value=True)
+        self.entry.update(intent="control")
+        self.entry["input"]["type"] = "m.room.message"
+        self.entry["input"]["content"]["org.agentteams.coordination"] = {}
+        room = {"gaps": ["older-page"]}
+        self.matrix.load.return_value["state"]["rooms"] = {"!room:test": room}
+        packet = {"text": "Canonical handoff", "meta": {"teamharness_coordination": {"kind": "handoff"}}}
+        with patch("task_coordination.notification", return_value=packet) as verified:
+            await self.ordinary.drain()
+            self.adapter._dispatch_coordination.assert_not_awaited()
+            room["gaps"] = []
+            await self.ordinary.drain()
+            self.adapter._dispatch_coordination.assert_awaited_once()
+            verified.assert_called_once()
+            await self.ordinary.drain()
+            self.adapter._dispatch_coordination.assert_awaited_once()
+        self.matrix.message_claim.assert_not_called()
+
+    async def test_control_recovery_ignores_committed_or_unverified_packets(self):
+        self.adapter._user_id = "@worker:test"
+        self.adapter._dispatch_coordination = AsyncMock(return_value=True)
+        self.entry.update(intent="control", native_commit={"runtime": "hermes"})
+        self.entry["input"]["content"]["org.agentteams.coordination"] = {}
+        with patch("task_coordination.notification") as verified:
+            await self.ordinary.drain()
+            verified.assert_not_called()
+        self.entry.pop("native_commit")
+        from task_coordination import IgnoredNotification
+        with patch("task_coordination.notification", side_effect=IgnoredNotification("stale")):
+            await self.ordinary.drain()
+        self.adapter._dispatch_coordination.assert_not_awaited()
+
     async def test_quiet_start_builds_native_session_from_current_checkpoint(self):
         from gateway.config import GatewayConfig, PlatformConfig
         from gateway.run import GatewayRunner
