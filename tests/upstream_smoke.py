@@ -40,6 +40,7 @@ def main() -> None:
         runtime = workspace / "runtime/runtime.yaml"
         runtime.parent.mkdir()
         record = yaml.safe_dump({
+            "team": {"name": "smoke-team"},
             "member": {"runtime": "hermes", "role": "worker", "runtimeName": "smoke-worker",
                        "matrixUserId": "@worker:matrix.invalid", "personalRoomId": "!home:matrix.invalid"},
             "matrix": {"transport": {"homeserver": "http://matrix.invalid:8008", "encryption": False,
