@@ -62,7 +62,7 @@ def test_streaming_edit_marks_its_original_response(monkeypatch):
     asyncio.run(check())
 
 
-@pytest.mark.parametrize("action", ["stop", "steer"])
+@pytest.mark.parametrize("action", ["stop"])
 def test_native_shell_exits_before_stop_ack_and_supplement(monkeypatch, tmp_path, action):
     monkeypatch.setenv("MATRIX_ALLOWED_USERS", "@human:test")
 
@@ -116,6 +116,45 @@ def test_native_shell_exits_before_stop_ack_and_supplement(monkeypatch, tmp_path
             assert "新增杭州" in forwarded.call_args.args[0].text
         else:
             forwarded.assert_not_awaited()
+
+    asyncio.run(check())
+
+
+def test_supplements_use_native_steer_without_stopping_the_active_task(monkeypatch):
+    monkeypatch.setenv("MATRIX_ALLOWED_USERS", "@human:test")
+
+    async def check():
+        adapter = MatrixAdapter(PlatformConfig(enabled=True))
+        adapter._user_id = "@agent:test"
+        adapter._client = SimpleNamespace(
+            get_joined_members=AsyncMock(return_value={"@agent:test": {}, "@human:test": {}}),
+            send_message_event=AsyncMock())
+        agent = NativeAgent()
+        task = asyncio.create_task(asyncio.Event().wait())
+        run = {"event": message("$start", "original"), "task": task}
+        adapter._direct_runs["!dm:test"] = run
+        forwarded = []
+
+        async def native_handle(self, event):
+            forwarded.append(event)
+            assert event.text.startswith("/steer ")
+            assert agent.steer(event.text.removeprefix("/steer "))
+
+        monkeypatch.setattr(_NativeMatrixAdapter, "handle_message", native_handle)
+        try:
+            for index in range(2):
+                supplement = message(f"$supplement-{index}", f"additional {index}", "steer")
+                await adapter.handle_message(supplement)
+                assert supplement.text == f"additional {index}"
+                assert forwarded[-1].message_id == supplement.message_id
+                assert forwarded[-1].source is supplement.source
+            assert agent._drain_pending_steer() == "additional 0\nadditional 1"
+            assert not task.done() and not task.cancelling()
+            assert not run.get("stopped")
+            adapter._client.send_message_event.assert_not_awaited()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(check())
 
