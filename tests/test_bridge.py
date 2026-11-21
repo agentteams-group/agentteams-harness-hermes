@@ -85,6 +85,18 @@ def test_team_task_tools_use_projected_scope_and_actual_process(tmp_path, monkey
     assert config["mcp_servers"]["custom"] == {"command": "custom-mcp"}
 
 
+def test_manager_has_common_task_tools_without_team_membership(tmp_path, monkeypatch):
+    monkeypatch.delenv("TEAMHARNESS_RUNTIME_CONFIG", raising=False)
+    runtime = tmp_path / "runtime/runtime.yaml"
+    runtime.parent.mkdir()
+    runtime.write_text(yaml.safe_dump({"member": {"runtime": "hermes", "role": "manager"}}))
+    home = tmp_path / ".hermes"
+    bridge_openclaw_to_hermes(_make_openclaw_cfg(vision=False), home)
+    config = yaml.safe_load((home / "config.yaml").read_text())
+    assert config["mcp_servers"]["teamharness"]["env"]["AGENTTEAMS_AGENT_ROLE"] == "manager"
+    assert config["mcp_servers"]["teamharness"]["env"]["TEAMHARNESS_RUNTIME_CONFIG"] == str(runtime)
+
+
 def test_managed_terminal_uses_worker_workspace_instead_of_private_runtime_directory(tmp_path):
     runtime = tmp_path / "runtime/runtime.yaml"
     runtime.parent.mkdir()

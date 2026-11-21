@@ -378,6 +378,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
         content = event.content if isinstance(event.content, dict) else event.content.serialize()
         message = MessageEvent(text=packet["text"], source=source,
             message_id=str(event.event_id), raw_message=content)
+        message._task_protocol_meta = packet["meta"]
         await self.handle_message(message)
         return getattr(message, "_gateway_accepted", False)
 
@@ -408,6 +409,52 @@ class MatrixAdapter(_NativeMatrixAdapter):
         })
 
     async def _process_message_background(self, event, session_key):
+        if os.getenv("AGENTTEAMS_CONTROLLER_URL") and os.getenv("AGENTTEAMS_PLUGIN_DIR"):
+            from hermes_matrix.public_tasks import common, install, task_turn
+            install()
+            public_event = (getattr(event, "_task_protocol_meta", {}) or {}).get("teamharness_coordination")
+            recovered = getattr(event, "_agentteams_recovery", None)
+            if not public_event and recovered:
+                task = await asyncio.to_thread(common("task_native").controller_json,
+                    "tasks/" + recovered["task_id"] + "/meta")
+                if task.get("task_plan_id"):
+                    public_event = {"kind": "task_assigned", "task_id": task["task_id"],
+                        "main_task_id": task["main_task_id"], "project_id": task.get("project_id", ""),
+                        "delivery_id": task["notifyTxn"]}
+            prepared, phase = {}, None
+            if public_event:
+                public_event = dict(public_event)
+                if public_event["kind"] in {"handoff", "task_submitted", "main_task_ready"}:
+                    phase = common("phase_recovery")
+                    admission = await phase.notify(public_event["id"], event.message_id, "begin")
+                    if admission.get("active") is not True:
+                        return
+                    if public_event["kind"] == "handoff":
+                        public_event["pending_task_ids"] = admission["pending_task_ids"]
+                prepared = await asyncio.to_thread(common("task_native").invoke,
+                    {"operation": "prepare_event", "event": public_event})
+                if prepared.get("ok") is False:
+                    if phase and prepared.get("retryable"):
+                        await phase.notify(public_event["id"], event.message_id, "retry")
+                    raise RuntimeError("Public Task context is unavailable; no model turn was started")
+            try:
+                role = os.getenv("AGENTTEAMS_AGENT_ROLE", "worker")
+                if role in {"manager", "leader", "team_leader"}:
+                    arguments = {"operation": "roster", "role": role}
+                    if role != "manager":
+                        import yaml
+                        runtime = yaml.safe_load(Path(os.environ["TEAMHARNESS_RUNTIME_CONFIG"]).read_text())
+                        arguments["team"] = runtime["team"]["name"]
+                    prepared["roster"] = await asyncio.to_thread(common("task_native").invoke, arguments)
+                with task_turn(event, prepared):
+                    return await self._process_native_message_background(event, session_key)
+            except BaseException as error:
+                if phase and phase.retryable_error(error):
+                    await phase.notify(public_event["id"], event.message_id, "retry")
+                raise
+        return await self._process_native_message_background(event, session_key)
+
+    async def _process_native_message_background(self, event, session_key):
         ordinary = getattr(event, "_agentteams_message", None)
         if not ordinary:
             return await self._process_managed_message(event, session_key)
@@ -490,7 +537,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
             inputs = [*run["inputs"], event.text]
             event._agentteams_inputs = inputs
             event._agentteams_input_ids = [*run.get("input_ids", [run["event"].message_id]), event.message_id]
-            event.text = "Continue the original request using the supplementary information below. Preserve earlier results and conversation context.\n\n" + "\n\n".join(inputs)
+            event.text = "Continue the original request using the supplementary information below. Preserve earlier results and conversation context.\n\n" + "\n\n".join(
+                f"[Message {identity}]\n{text}" for identity, text in zip(event._agentteams_input_ids, inputs))
             if self._session_receipts:
                 await asyncio.to_thread(self._session_receipts.link, event.source.chat_id, event.message_id, event._agentteams_input_ids)
             return await super().handle_message(event)
