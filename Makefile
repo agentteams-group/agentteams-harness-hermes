@@ -39,7 +39,7 @@ native-recovery-smoke:
 	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_recovery_smoke.py
 	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_shared_input_smoke.py
 	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_task_tools_smoke.py
-	docker run --rm --network none --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -e AGENTTEAMS_PLUGIN_DIR=/opt/agentteams/plugins/teamharness -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_public_tasks_smoke.py
+	docker run --rm --network none --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib/telemetry:/opt/agentteams/scripts/lib -e AGENTTEAMS_PLUGIN_DIR=/opt/agentteams/plugins/teamharness -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_public_tasks_smoke.py
 
 storage-config-smoke:
 	python3 tests/storage_config_smoke.py --image $(IMAGE):$(VERSION)

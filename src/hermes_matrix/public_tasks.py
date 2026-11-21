@@ -50,6 +50,7 @@ class TaskTurn:
         self.previous_tools = None
         self.receipts = {}
         self.phase_complete = False
+        self.model_input_ids = []
 
     def trace_metadata(self):
         coordination = self.meta.get("teamharness_coordination") or {}
@@ -213,11 +214,26 @@ def install():
                 system["content"] += "\n\n" + prompt
             if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() in {"true", "1"}:
                 from opentelemetry import trace
-                trace.get_current_span().set_attribute("agentteams.input.event_ids",
-                    [source["eventId"] for source in turn.context["sources"]
-                     if any(message.get("role") == "user" and f"[Message {source['eventId']}]" in str(message.get("content", ""))
-                            for message in messages)])
+                turn.model_input_ids = [source["eventId"] for source in turn.context["sources"]
+                    if any(message.get("role") == "user" and f"[Message {source['eventId']}]" in str(message.get("content", ""))
+                           for message in messages)]
+                trace.get_current_span().set_attribute("agentteams.input.event_ids", turn.model_input_ids)
         return build(agent, messages, *args, **kwargs)
+
+    def traced_provider(call):
+        @wraps(call)
+        def invoke(agent, *args, **kwargs):
+            turn = current_turn.get()
+            if not turn or os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() not in {"true", "1"}:
+                return call(agent, *args, **kwargs)
+            import at_telemetry as telemetry
+            token = telemetry._correlation.set({**telemetry._correlation.get(),
+                "agentteams.input.event_ids": turn.model_input_ids})
+            try:
+                return call(agent, *args, **kwargs)
+            finally:
+                telemetry._correlation.reset(token)
+        return invoke
 
     execute = model_tools.handle_function_call
     @wraps(execute)
@@ -259,6 +275,8 @@ def install():
     prepare._agentteams_public_tasks = True
     turn_context._collect_pre_llm_call_context = prepare
     AIAgent._build_api_kwargs = wire
+    AIAgent._interruptible_api_call = traced_provider(AIAgent._interruptible_api_call)
+    AIAgent._interruptible_streaming_api_call = traced_provider(AIAgent._interruptible_streaming_api_call)
     model_tools.handle_function_call = tool
     AIAgent._execute_tool_calls = tools
     conversation_loop.run_tool_round = finish_phase

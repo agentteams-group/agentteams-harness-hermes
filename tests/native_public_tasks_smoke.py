@@ -82,7 +82,8 @@ class NativePublicTaskSmoke(TestCase):
                     chunks = [{"id": "fixture", "object": "chat.completion.chunk", "created": 1,
                         "model": "public-task-fixture", "choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
                         {"id": "fixture", "object": "chat.completion.chunk", "created": 1,
-                         "model": "public-task-fixture", "choices": [{"index": 0, "delta": {}, "finish_reason": finish}]}]
+                         "model": "public-task-fixture", "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
+                         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}]
                     body = ("".join("data: " + json.dumps(row) + "\n\n" for row in chunks) + "data: [DONE]\n\n").encode()
                     content_type = "text/event-stream"
                 else:
@@ -111,6 +112,32 @@ class NativePublicTaskSmoke(TestCase):
                             for row in self.db.get_messages(agent.session_id)))
         self.assertTrue(any(row.get("role") == "tool" and "saved-submission" in str(row.get("content"))
                             for row in self.db.get_messages(agent.session_id)))
+
+    def test_actual_model_and_task_trace_keep_verified_identity_without_content(self):
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        import at_telemetry as telemetry
+        exporter = InMemorySpanExporter()
+        os.environ.update(AGENTTEAMS_OTEL_ENABLED="true", AGENTTEAMS_OTEL_RUNTIME="hermes", AGENTTEAMS_OTEL_CAPTURE_CONTENT="false")
+        provider = telemetry.configure(local_only=True)
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        self.event._task_protocol_meta = {"teamharness_coordination": {"id": "c" * 32, "kind": "task_assigned", "task_id": "own"}}
+        self.prepared["context"]["generation"] = 3
+        self.test_actual_native_model_wire_and_tool_receipt_are_bound()
+        spans = exporter.get_finished_spans()
+        root = next(span for span in spans if span.name == "worker.turn")
+        model = next(span for span in spans if span.attributes.get("gen_ai.operation.name") == "chat" or span.name == "openai.chat")
+        tool = next(span for span in spans if span.attributes.get("gen_ai.tool.name") == TASK_TOOL)
+        for span in (root, model, tool):
+            self.assertEqual(span.attributes["agentteams.task.id"], "own")
+            self.assertEqual(span.attributes["agentteams.event.id"], "$source")
+            self.assertEqual(span.attributes["agentteams.coordination.id"], "c" * 32)
+            self.assertEqual(span.attributes["agentteams.execution.generation"], 3)
+        self.assertEqual(tuple(model.attributes["agentteams.input.event_ids"]), ("$source",))
+        self.assertEqual(model.attributes["gen_ai.usage.input_tokens"], 1)
+        self.assertEqual(model.attributes["gen_ai.usage.output_tokens"], 1)
+        self.assertEqual(model.parent.span_id, root.context.span_id)
+        self.assertFalse(any("Perform this own synthetic task" in str(span.attributes) for span in spans))
 
     def test_known_validation_refusal_can_be_corrected_in_the_same_native_turn(self):
         self.invalid_first = True
