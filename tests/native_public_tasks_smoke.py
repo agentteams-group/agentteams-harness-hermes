@@ -183,6 +183,22 @@ class NativePublicTaskSmoke(TestCase):
         self.assertTrue(actions)
         self.assertEqual(set(actions), {"admit_tools"})
 
+    def test_ordinary_native_canonical_task_does_not_double_journal(self):
+        from hermes_matrix.message_execution import ordinary_turn, install_ordinary_guard
+        install_ordinary_guard()
+        matrix = SimpleNamespace(message_begin_tools=Mock(), message_finish_tools=Mock(),
+            message_current=Mock(return_value={"checkpoint_digest": "source-current"}))
+        ordinary = SimpleNamespace(matrix=matrix, identity={"event_key": "source"},
+            session=SimpleNamespace(session_id="native-public-task"))
+        token = ordinary_turn.set(ordinary)
+        try:
+            self.test_actual_native_model_wire_and_tool_receipt_are_bound()
+        finally:
+            ordinary_turn.reset(token)
+        matrix.message_begin_tools.assert_not_called()
+        matrix.message_finish_tools.assert_not_called()
+        self.assertEqual(ordinary.checkpoint_digest, "source-current")
+
     def test_known_validation_refusal_can_be_corrected_in_the_same_native_turn(self):
         self.invalid_first = True
         self.test_actual_native_model_wire_and_tool_receipt_are_bound()
