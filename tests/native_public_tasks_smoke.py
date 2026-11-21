@@ -139,6 +139,50 @@ class NativePublicTaskSmoke(TestCase):
         self.assertEqual(model.parent.span_id, root.context.span_id)
         self.assertFalse(any("Perform this own synthetic task" in str(span.attributes) for span in spans))
 
+    def test_task_business_tools_use_public_journal_and_unknown_checkpoint_blocks_model(self):
+        import model_tools
+        from openai.types.chat import ChatCompletionMessage
+        from hermes_matrix.public_tasks import TaskTurn
+        from task_operation import admit, begin, finish, result_bytes
+        from task_recovery import RecoveryConflict
+        checkpoint, actions = {}, []
+        def journal(action, **fields):
+            nonlocal checkpoint
+            actions.append(action)
+            if action == "admit_tools":
+                return admit(checkpoint)
+            if action == "begin_tools":
+                operation, checkpoint = begin(checkpoint, ["team", "own"], fields["calls"])
+                return operation
+            data = result_bytes(checkpoint, fields["operation_id"], fields["results"])
+            checkpoint = finish(checkpoint, fields["operation_id"], {"key": "fixture/public-result", "size": len(data)})
+            return checkpoint
+        self.event._agentteams_recovery = {"task_id": "own", "team_id": "team", "generation": 1}
+        agent = self.agent()
+        agent.tools = model_tools.get_tool_definitions(enabled_toolsets=["file"])
+        agent.valid_tool_names = {tool["function"]["name"] for tool in agent.tools}
+        messages = []
+        assistant = ChatCompletionMessage(role="assistant", content=None, tool_calls=[{"id": "native-write", "type": "function",
+            "function": {"name": "write_file", "arguments": json.dumps({"path": "journal.txt", "content": "own journal fixture"})}}])
+        with task_turn(self.event, self.prepared) as turn, patch.object(turn, "task_journal", side_effect=journal):
+            turn.bind(agent, "journal-native", messages)
+            agent._execute_tool_calls(assistant, messages, "journal-native", 0)
+            self.assertEqual((self.output / "journal.txt").read_text(), "own journal fixture")
+            self.assertEqual(actions, ["admit_tools", "begin_tools", "finish_tools"])
+            self.assertEqual(checkpoint["operation"]["state"], "verified")
+            checkpoint["operation"]["state"] = "unknown"
+            with self.assertRaises(RecoveryConflict):
+                agent._build_api_kwargs([{"role": "user", "content": "Do not infer over unconfirmed effects"}])
+
+    def test_canonical_task_is_not_written_to_business_journal(self):
+        from hermes_matrix.public_tasks import TaskTurn
+        actions = []
+        self.event._agentteams_recovery = {"task_id": "own", "team_id": "team", "generation": 1}
+        with patch.object(TaskTurn, "task_journal", side_effect=lambda action, **fields: actions.append(action)):
+            self.test_actual_native_model_wire_and_tool_receipt_are_bound()
+        self.assertTrue(actions)
+        self.assertEqual(set(actions), {"admit_tools"})
+
     def test_known_validation_refusal_can_be_corrected_in_the_same_native_turn(self):
         self.invalid_first = True
         self.test_actual_native_model_wire_and_tool_receipt_are_bound()

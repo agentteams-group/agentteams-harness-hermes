@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from copy import copy
 from contextvars import ContextVar
 from dataclasses import replace
 from functools import lru_cache, wraps
@@ -51,6 +52,14 @@ class TaskTurn:
         self.receipts = {}
         self.phase_complete = False
         self.model_input_ids = []
+
+    def task_journal(self, action, **fields):
+        identity = getattr(self.event, "_agentteams_recovery", None)
+        if not identity:
+            return None
+        from task_recovery_rpc import execute
+        return execute({"runtime": "hermes", "device_delivery": True, "identity": identity,
+                        "action": action, **fields})
 
     def trace_metadata(self):
         coordination = self.meta.get("teamharness_coordination") or {}
@@ -218,6 +227,8 @@ def install():
                     if any(message.get("role") == "user" and f"[Message {source['eventId']}]" in str(message.get("content", ""))
                            for message in messages)]
                 trace.get_current_span().set_attribute("agentteams.input.event_ids", turn.model_input_ids)
+        if turn:
+            turn.task_journal("admit_tools")
         return build(agent, messages, *args, **kwargs)
 
     def traced_provider(call):
@@ -249,8 +260,34 @@ def install():
     batch = AIAgent._execute_tool_calls
     @wraps(batch)
     def tools(agent, assistant_message, messages, *args, **kwargs):
-        result = batch(agent, assistant_message, messages, *args, **kwargs)
         turn = current_turn.get()
+        identity = getattr(turn.event, "_agentteams_recovery", None) if turn else None
+        if identity:
+            turn.task_journal("admit_tools")
+            # The fixed public Task resolver is native-owned. Fence business
+            # effects first; publishing Task completion must not revoke their lease.
+            business = [call for call in assistant_message.tool_calls if call.function.name != TASK_TOOL]
+            canonical = [call for call in assistant_message.tool_calls if call.function.name == TASK_TOOL]
+            result = None
+            if business:
+                operation = turn.task_journal("begin_tools", calls=[{"id": call.id,
+                    "name": call.function.name, "arguments": call.function.arguments} for call in business])
+                selected = copy(assistant_message)
+                selected.tool_calls = business
+                offset = len(messages)
+                result = batch(agent, selected, messages, *args, **kwargs)
+                rows = [row for row in messages[offset:] if row.get("role") == "tool"]
+                if (getattr(agent, "_incremental_persistence_failed", False)
+                        or any(row.get("effect_disposition") == "unknown" for row in rows)):
+                    raise RuntimeError("Native Task tool results require verification")
+                turn.task_journal("finish_tools", operation_id=operation,
+                    results=[{"id": row["tool_call_id"], "content": row["content"]} for row in rows])
+            if canonical:
+                selected = copy(assistant_message)
+                selected.tool_calls = canonical
+                result = batch(agent, selected, messages, *args, **kwargs)
+        else:
+            result = batch(agent, assistant_message, messages, *args, **kwargs)
         if turn:
             turn.checkpoint_refreshed(agent, messages)
         return result
