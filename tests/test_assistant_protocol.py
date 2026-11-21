@@ -6,7 +6,8 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-sys.path.insert(0, str(Path(os.environ["AT_SOURCE"]) / "tests/lib"))
+core = Path(os.environ.get("AT_SOURCE", Path(__file__).resolve().parents[1] / ".deps/AgentTeams"))
+sys.path.insert(0, str(core / "tests/lib"))
 from assistant_fixture import AssistantFixture
 from test_shared_input_boundary import fixture
 
