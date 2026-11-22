@@ -422,22 +422,22 @@ class MatrixAdapter(_NativeMatrixAdapter):
                         "main_task_id": task["main_task_id"], "project_id": task.get("project_id", ""),
                         "delivery_id": task["notifyTxn"]}
             prepared, phase = {}, None
-            if public_event:
-                public_event = dict(public_event)
-                if public_event["kind"] in {"handoff", "task_submitted", "main_task_ready"}:
-                    phase = common("phase_recovery")
-                    admission = await phase.notify(public_event["id"], event.message_id, "begin")
-                    if admission.get("active") is not True:
-                        return
-                    if public_event["kind"] == "handoff":
-                        public_event["pending_task_ids"] = admission["pending_task_ids"]
-                prepared = await asyncio.to_thread(common("task_native").invoke,
-                    {"operation": "prepare_event", "event": public_event})
-                if prepared.get("ok") is False:
-                    if phase and prepared.get("retryable"):
-                        await phase.notify(public_event["id"], event.message_id, "retry")
-                    raise RuntimeError("Public Task context is unavailable; no model turn was started")
             try:
+                if public_event:
+                    public_event = dict(public_event)
+                    if public_event["kind"] in {"handoff", "task_submitted", "main_task_ready"}:
+                        phase = common("phase_recovery")
+                        admission = await phase.notify(public_event["id"], event.message_id, "begin")
+                        if admission.get("active") is not True:
+                            return
+                        if public_event["kind"] == "handoff":
+                            public_event["pending_task_ids"] = admission["pending_task_ids"]
+                    prepared = await asyncio.to_thread(common("task_native").invoke,
+                        {"operation": "prepare_event", "event": public_event})
+                    if prepared.get("ok") is False:
+                        if phase and prepared.get("retryable"):
+                            await phase.notify(public_event["id"], event.message_id, "retry")
+                        raise RuntimeError("Public Task context is unavailable; no model turn was started")
                 role = os.getenv("AGENTTEAMS_AGENT_ROLE", "worker")
                 if role in {"manager", "leader", "team_leader"}:
                     arguments = {"operation": "roster", "role": role}
@@ -447,8 +447,16 @@ class MatrixAdapter(_NativeMatrixAdapter):
                         arguments["team"] = runtime["team"]["name"]
                     prepared["roster"] = await asyncio.to_thread(common("task_native").invoke, arguments)
                 with task_turn(event, prepared):
+                    if public_event:
+                        trace_event("coordination.native_begin", event_id=event.message_id,
+                                    coordination_id=public_event.get("id", ""), phase=public_event["kind"])
                     return await self._process_native_message_background(event, session_key)
             except BaseException as error:
+                if public_event and not isinstance(error, asyncio.CancelledError):
+                    trace_event("coordination.native_error", event_id=event.message_id,
+                                coordination_id=public_event.get("id", ""), phase=public_event["kind"],
+                                error_type=type(error).__name__)
+                    logger.warning("Task coordination failed before or during native dispatch", exc_info=True)
                 if phase and phase.retryable_error(error):
                     await phase.notify(public_event["id"], event.message_id, "retry")
                 raise

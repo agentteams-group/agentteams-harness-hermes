@@ -38,10 +38,14 @@ class TaskTurn:
         source_ids = getattr(event, "_agentteams_input_ids", [])
         if len(source_ids) > 1 and not meta.get("teamharness_coordination"):
             meta["matrix_input_sources"] = [{**meta, "event_id": identity} for identity in source_ids]
+        # Coordination notifications already carry a verified Task scope.
+        # Only a Human request supplies input references for creating a Task.
+        sources = []
+        if str(event.message_id).startswith("$") and not meta.get("teamharness_coordination"):
+            sources = common("task_receipt").creation_sources(meta)
         self.context = dict(prepared or {})
         self.context.update(role=os.getenv("AGENTTEAMS_AGENT_ROLE", "worker"),
-                            sources=common("task_receipt").creation_sources(meta) if str(event.message_id).startswith("$") else [],
-                            sourceEvent=event.message_id)
+                            sources=sources, sourceEvent=event.message_id)
         self.event = event
         self.meta = meta
         self.pending = []

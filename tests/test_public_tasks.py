@@ -42,6 +42,19 @@ def test_native_tool_result_keeps_cli_result_and_adds_verified_fact(modules, mon
     assert public_tasks.current_turn.get() is None
 
 
+def test_verified_handoff_uses_admitted_task_ids_without_a_human_source(modules, monkeypatch):
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "team_leader")
+    notice = event("$handoff")
+    notice._task_protocol_meta = {"sender_id": "", "teamharness_coordination": {"kind": "handoff"}}
+    with public_tasks.task_turn(notice, {"planning": ["main"]}) as turn:
+        assert turn.context["planning"] == ["main"]
+        assert turn.context["sources"] == []
+    notice._task_protocol_meta.pop("teamharness_coordination")
+    with pytest.raises(ValueError, match="complete native source identity"):
+        with public_tasks.task_turn(notice):
+            pass
+
+
 def test_model_cannot_supply_source_or_operate_on_another_execution(modules):
     with public_tasks.task_turn(event(), {"execution": "own"}) as turn:
         with pytest.raises(ValueError, match="execution"):
