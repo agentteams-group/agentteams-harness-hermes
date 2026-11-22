@@ -376,8 +376,11 @@ class MatrixAdapter(_NativeMatrixAdapter):
             user_id=str(event.sender), thread_id=str(event.event_id))
         from gateway.platforms.event import MessageEvent
         content = event.content if isinstance(event.content, dict) else event.content.serialize()
+        own_closure = (str(event.sender) == str(self._user_id)
+                       and packet["meta"]["teamharness_coordination"]["kind"] == "main_task_ready")
         message = MessageEvent(text=packet["text"], source=source,
-            message_id=str(event.event_id), raw_message=content)
+            message_id=str(event.event_id), raw_message=content,
+            internal=own_closure, allow_gateway_control=False)
         message._task_protocol_meta = packet["meta"]
         await self.handle_message(message)
         return getattr(message, "_gateway_accepted", False)

@@ -47,6 +47,8 @@ def main():
                 assert message.text == 'Canonical '+kind
                 assert message.source.thread_id == '$'+kind
                 assert kind in adapter._event_session_key(message)
+                assert message.internal is (kind == 'main_task_ready')
+                assert message.allow_gateway_control is False
             current['task']['tasks'][0]['status'] = 'submitted'
             await adapter._on_room_message(raw)
             assert adapter.handle_message.call_count == 3
