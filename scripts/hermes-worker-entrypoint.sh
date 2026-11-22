@@ -31,6 +31,8 @@ WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 INSTALL_DIR="/root/agentteams-fs/agents"
 WORKSPACE="${AGENTTEAMS_WORKER_HOME:-${INSTALL_DIR}/${WORKER_NAME}}"
 export HOME="${WORKSPACE}"
+export AGENTTEAMS_WORKER_HOME="${WORKSPACE}"
+export TEAMHARNESS_SHARED_DIR="${WORKSPACE}/shared"
 
 log() {
     echo "[agentteams-hermes-worker $(date '+%Y-%m-%d %H:%M:%S')] $1"
