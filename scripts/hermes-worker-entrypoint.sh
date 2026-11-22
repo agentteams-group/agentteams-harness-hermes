@@ -20,6 +20,7 @@ set -e
 # Source shared environment bootstrap (provides ensure_mc_credentials in cloud mode)
 source /opt/agentteams/scripts/lib/agentteams-env.sh 2>/dev/null || true
 export AGENTTEAMS_OTEL_RUNTIME=hermes
+export AGENTTEAMS_PLUGIN_DIR="${AGENTTEAMS_PLUGIN_DIR:-/opt/agentteams/plugins/teamharness}"
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 # Align with the openclaw worker layout: HOME == workspace == MinIO mirror root.
