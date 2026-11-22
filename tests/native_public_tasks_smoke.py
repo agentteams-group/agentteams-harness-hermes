@@ -183,6 +183,24 @@ class NativePublicTaskSmoke(TestCase):
         self.assertTrue(actions)
         self.assertEqual(set(actions), {"admit_tools"})
 
+    def test_deferred_task_uses_same_canonical_authority(self):
+        from hermes_matrix.public_tasks import is_canonical_task_call
+        from openai.types.chat import ChatCompletionMessage
+
+        calls = ChatCompletionMessage(role="assistant", content=None, tool_calls=[
+            {"id": "deferred-" + name, "type": "function", "function": {
+                "name": "tool_call", "arguments": json.dumps({"calls": [{
+                    "name": name, "arguments": arguments,
+                }]})
+            }}
+            for name, arguments in [
+                (TASK_TOOL, {"action": "submit", "taskId": "own", "summary": "Done"}),
+                ("read_file", {"path": "output.txt"}),
+            ]
+        ]).tool_calls
+        self.assertTrue(is_canonical_task_call(calls[0]))
+        self.assertFalse(is_canonical_task_call(calls[1]))
+
     def test_ordinary_native_canonical_task_does_not_double_journal(self):
         from hermes_matrix.message_execution import ordinary_turn, install_ordinary_guard
         install_ordinary_guard()

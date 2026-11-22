@@ -22,9 +22,9 @@ ordinary_turn = ContextVar("hermes_ordinary_turn", default=None)
 def execute_tools(matrix, identity, native, agent, assistant, messages, effective_task_id, api_call_count):
     # Only the resolver installed by our current native frame delegates to the
     # canonical authority. A similarly named external MCP tool does not.
-    from hermes_matrix.public_tasks import current_turn, TASK_TOOL
+    from hermes_matrix.public_tasks import current_turn, is_canonical_task_call
     public = current_turn.get()
-    canonical = [call for call in assistant.tool_calls if public and call.function.name == TASK_TOOL]
+    canonical = [call for call in assistant.tool_calls if public and is_canonical_task_call(call)]
     business = [call for call in assistant.tool_calls if call not in canonical]
     saved = None
     if business:

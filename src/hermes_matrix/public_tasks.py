@@ -19,6 +19,22 @@ TASK_TOOL = "mcp__teamharness__task"
 LEGACY_TASK_TOOLS = {"mcp__teamharness__" + name for name in ("taskflow", "projectflow", "filesync")}
 
 
+def is_canonical_task_call(call):
+    if call.function.name == TASK_TOOL:
+        return True
+    if call.function.name != "tool_call":
+        return False
+    from tools.tool_search import normalize_tool_call_entries
+    try:
+        arguments = json.loads(call.function.arguments)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(arguments, dict):
+        return False
+    entries, error = normalize_tool_call_entries(arguments)
+    return not error and len(entries) == 1 and entries[0]["name"] == TASK_TOOL
+
+
 @lru_cache(maxsize=None)
 def common(name):
     path = Path(os.environ["AGENTTEAMS_PLUGIN_DIR"]) / "mcp/common" / (name + ".py")
@@ -270,8 +286,8 @@ def install():
             turn.task_journal("admit_tools")
             # The fixed public Task resolver is native-owned. Fence business
             # effects first; publishing Task completion must not revoke their lease.
-            business = [call for call in assistant_message.tool_calls if call.function.name != TASK_TOOL]
-            canonical = [call for call in assistant_message.tool_calls if call.function.name == TASK_TOOL]
+            canonical = [call for call in assistant_message.tool_calls if is_canonical_task_call(call)]
+            business = [call for call in assistant_message.tool_calls if call not in canonical]
             result = None
             if business:
                 operation = turn.task_journal("begin_tools", calls=[{"id": call.id,
