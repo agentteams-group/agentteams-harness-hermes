@@ -403,7 +403,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
             }[status],
             "com.agentteams.execution": {
                 "run_id": run["event"].message_id, "status": status,
-                "capabilities": ["stop", "steer"],
+                "capabilities": ["stop", "steer"], "steering_mode": "native",
                 **({"message_id": run["message_id"]} if run.get("message_id") else {}),
             },
         })
@@ -521,6 +521,19 @@ class MatrixAdapter(_NativeMatrixAdapter):
             return
         if event.source.user_id != run["event"].source.user_id or not await self._direct_member(event):
             return
+        if self._direct_runs.get(event.source.chat_id) is not run or run["task"].done():
+            if action == "steer":
+                return await super().handle_message(event)
+            return
+        if action == "steer" and not getattr(event, "media_urls", None):
+            if not event.text.strip():
+                return
+            # Use the native command path: it owns steering, source context and
+            # the queued follow-up when completion wins the boundary race.
+            from copy import copy
+            command = copy(event)
+            command.text = "/steer " + event.text
+            return await super().handle_message(command)
         runner = getattr(self._message_handler, "__self__", None)
         # The native runner owns a worker thread. Cancelling its asyncio waiter
         # would leave shell/MCP work alive; request its hard interrupt instead.
