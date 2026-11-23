@@ -28,6 +28,8 @@ jobs:
           python-version: '3.14'
       - run: python -m pip install pytest pyyaml httpx rich typer
       - run: make test
+        env:
+          AT_SOURCE: ${{ github.workspace }}/.deps/AgentTeams
       - run: bash -n scripts/hermes-worker-entrypoint.sh
 
   image:

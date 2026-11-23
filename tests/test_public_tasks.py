@@ -1,5 +1,6 @@
 """Hermes native-binding contract fixtures; not model/E2E certification."""
 import json
+import os
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
@@ -11,7 +12,7 @@ from hermes_matrix import public_tasks
 
 @pytest.fixture
 def modules(monkeypatch):
-    source = Path(__file__).resolve().parents[2]
+    source = Path(os.environ.get("AT_SOURCE", Path(__file__).resolve().parents[2]))
     monkeypatch.setenv("AGENTTEAMS_PLUGIN_DIR", str(source / "plugins/teamharness"))
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
     public_tasks.common.cache_clear()
