@@ -4,7 +4,7 @@ IMAGE ?= ghcr.io/agentteams-group/agentteams-harness-hermes
 VERSION ?= v0.1.0
 PLATFORMS ?= linux/amd64,linux/arm64
 SHARED_CONTEXT ?= https://github.com/agentscope-ai/AgentTeams.git\#$(AT_REF):shared/lib
-TRACE_CONTEXT ?= https://github.com/agentscope-ai/AgentTeams.git\#$(AT_REF):plugins/teamharness/adapters/qwenpaw
+TRACE_CONTEXT ?= https://github.com/agentscope-ai/AgentTeams.git\#$(AT_REF):qwenpaw/adapters/teamharness
 TEAMHARNESS_CONTEXT ?= https://github.com/agentscope-ai/AgentTeams.git\#$(AT_REF):plugins/teamharness
 AT_CONTEXT ?= https://github.com/agentscope-ai/AgentTeams.git\#$(AT_REF)
 BUILD_ARGS = --build-context agentteams=$(AT_CONTEXT) --build-context shared=$(SHARED_CONTEXT) --build-context teamharness_trace=$(TRACE_CONTEXT) --build-context teamharness=$(TEAMHARNESS_CONTEXT) --build-arg HERMES_GIT_REF=$(HERMES_GIT_REF)
