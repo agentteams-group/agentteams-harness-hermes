@@ -6,7 +6,8 @@ PLATFORMS ?= linux/amd64,linux/arm64
 SHARED_CONTEXT ?= https://github.com/agentscope-ai/AgentTeams.git\#$(AT_REF):shared/lib
 TRACE_CONTEXT ?= https://github.com/agentscope-ai/AgentTeams.git\#$(AT_REF):plugins/teamharness/adapters/qwenpaw
 TEAMHARNESS_CONTEXT ?= https://github.com/agentscope-ai/AgentTeams.git\#$(AT_REF):plugins/teamharness
-BUILD_ARGS = --build-context shared=$(SHARED_CONTEXT) --build-context teamharness_trace=$(TRACE_CONTEXT) --build-context teamharness=$(TEAMHARNESS_CONTEXT) --build-arg HERMES_GIT_REF=$(HERMES_GIT_REF)
+AT_CONTEXT ?= https://github.com/agentscope-ai/AgentTeams.git\#$(AT_REF)
+BUILD_ARGS = --build-context agentteams=$(AT_CONTEXT) --build-context shared=$(SHARED_CONTEXT) --build-context teamharness_trace=$(TRACE_CONTEXT) --build-context teamharness=$(TEAMHARNESS_CONTEXT) --build-arg HERMES_GIT_REF=$(HERMES_GIT_REF)
 
 .PHONY: build push test smoke
 build:

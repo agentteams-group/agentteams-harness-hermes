@@ -30,6 +30,13 @@ FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 
 # ============ Final Image ============
+# Build the public CLI from the same pinned Core as the protocol assets.
+FROM higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/golang:1.26-alpine AS public-cli
+WORKDIR /build
+COPY --from=agentteams /agentteams-controller/ ./
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -o /out/agt ./cmd/agt && /out/agt assistant --help > /dev/null
+
 FROM ${HIGRESS_REGISTRY}/higress/python:3.14-slim
 
 ARG APT_MIRROR=
@@ -73,7 +80,7 @@ RUN JEMALLOC=$(find /usr/lib -name 'libjemalloc.so.2' -print -quit) \
 COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
 
 # AgentTeams CLI — for worker/team/human management via controller REST API
-COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
+COPY --from=public-cli /out/agt /usr/local/bin/agt
 
 # Install the latest Node.js 24 LTS (floor: 24.22.1 for the 2026-10-21 security release).
 # By default the build resolves the latest 24.x LTS from nodejs.org and verifies its SHA-256.
