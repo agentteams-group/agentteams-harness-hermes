@@ -368,7 +368,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
                 self._pending_matrix.running.add(matrix_event_key(str(event.room_id), str(event.event_id)))
 
     async def _dispatch_coordination(self, event, packet):
-        # The receipt admits the Leader's self-addressed closure without
+        # The receipt admits your self-addressed control input without
         # weakening the native own-echo policy for ordinary messages.
         # A real Matrix event starts the native thread/session. Keep opaque
         # Controller receipt session IDs out of Matrix transport thread IDs.
@@ -376,11 +376,11 @@ class MatrixAdapter(_NativeMatrixAdapter):
             user_id=str(event.sender), thread_id=str(event.event_id))
         from gateway.platforms.event import MessageEvent
         content = event.content if isinstance(event.content, dict) else event.content.serialize()
-        own_closure = (str(event.sender) == str(self._user_id)
-                       and packet["meta"]["teamharness_coordination"]["kind"] == "main_task_ready")
+        own_control = (str(event.sender) == str(self._user_id)
+                       and packet["meta"]["teamharness_coordination"]["kind"] in {"main_task_ready", "assistant_digest"})
         message = MessageEvent(text=packet["text"], source=source,
             message_id=str(event.event_id), raw_message=content,
-            internal=own_closure, allow_gateway_control=False)
+            internal=own_control, allow_gateway_control=False)
         message._task_protocol_meta = packet["meta"]
         await self.handle_message(message)
         return getattr(message, "_gateway_accepted", False)
