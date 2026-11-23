@@ -20,6 +20,7 @@ set -e
 # Source shared environment bootstrap (provides ensure_mc_credentials in cloud mode)
 source /opt/agentteams/scripts/lib/agentteams-env.sh 2>/dev/null || true
 export AGENTTEAMS_OTEL_RUNTIME=hermes
+export AGENTTEAMS_PLUGIN_DIR="${AGENTTEAMS_PLUGIN_DIR:-/opt/agentteams/plugins/teamharness}"
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 # Align with the openclaw worker layout: HOME == workspace == MinIO mirror root.
@@ -30,6 +31,8 @@ WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 INSTALL_DIR="/root/agentteams-fs/agents"
 WORKSPACE="${AGENTTEAMS_WORKER_HOME:-${INSTALL_DIR}/${WORKER_NAME}}"
 export HOME="${WORKSPACE}"
+export AGENTTEAMS_WORKER_HOME="${WORKSPACE}"
+export TEAMHARNESS_SHARED_DIR="${WORKSPACE}/shared"
 
 log() {
     echo "[agentteams-hermes-worker $(date '+%Y-%m-%d %H:%M:%S')] $1"

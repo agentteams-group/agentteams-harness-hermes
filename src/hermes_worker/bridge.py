@@ -580,9 +580,10 @@ def bridge_openclaw_to_hermes(
     if runtime_path.is_file():
         if member.get("runtime") == "hermes":
             os.environ["TEAMHARNESS_RUNTIME_CONFIG"] = str(runtime_path)
-        if member.get("runtime") == "hermes" and not runtime.get("team", {}).get("name"):
+        has_task_scope = bool(runtime.get("team", {}).get("name") or member.get("role") == "manager")
+        if member.get("runtime") == "hermes" and not has_task_scope:
             existing_yaml.get("mcp_servers", {}).pop("teamharness", None)
-        if member.get("runtime") == "hermes" and runtime.get("team", {}).get("name"):
+        if member.get("runtime") == "hermes" and has_task_scope:
             role = {"team_leader": "leader", "standalone": "worker"}.get(member.get("role"), member.get("role"))
             tool_env = {key: value for key, value in os.environ.items()
                         if key.startswith(("AGENTTEAMS_", "TEAMHARNESS_", "MC_", "OTEL_"))}

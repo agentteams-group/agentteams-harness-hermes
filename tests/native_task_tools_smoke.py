@@ -24,9 +24,10 @@ async def check(workspace):
     async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
         await session.initialize()
         tools = await session.list_tools()
-        taskflow = next(tool for tool in tools.tools if tool.name == "taskflow")
-        assert "checkpoint_task" in taskflow.input_schema["properties"]["action"]["enum"]
-    print("Hermes installed MCP SDK discovered native Task/checkpoint tools with projected scope (no model/Task execution)")
+        task = next(tool for tool in tools.tools if tool.name == "task")
+        assert "submit" in task.input_schema["properties"]["action"]["enum"]
+        assert "create" not in task.input_schema["properties"]["action"]["enum"]
+    print("Hermes installed MCP SDK discovered the common role-scoped Task tool (no model/Task execution)")
     return server
 
 
@@ -37,7 +38,7 @@ if __name__ == "__main__":
         from tools.mcp_tool_lifecycle import shutdown_mcp_servers
         try:
             registered = register_mcp_servers({"teamharness": server})
-            assert "mcp__teamharness__taskflow" in registered, registered
-            print("Hermes native tool registry exposes TeamHarness taskflow (no model/Task execution)")
+            assert "mcp__teamharness__task" in registered, registered
+            print("Hermes native tool registry exposes the common Task tool (no model/Task execution)")
         finally:
             shutdown_mcp_servers()

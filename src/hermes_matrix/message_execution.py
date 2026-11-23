@@ -1,6 +1,7 @@
 """Route durable ordinary room inputs to Hermes or deliver their saved replies."""
 import asyncio
 from contextvars import ContextVar
+from copy import copy
 from dataclasses import dataclass
 from functools import wraps
 from types import SimpleNamespace
@@ -19,19 +20,33 @@ ordinary_turn = ContextVar("hermes_ordinary_turn", default=None)
 
 
 def execute_tools(matrix, identity, native, agent, assistant, messages, effective_task_id, api_call_count):
-    calls = [{"id": tc.id, "name": tc.function.name, "arguments": tc.function.arguments}
-             for tc in assistant.tool_calls]
-    operation = matrix.message_begin_tools(identity, calls)
-    offset = len(messages)
-    native(agent, assistant, messages, effective_task_id, api_call_count)
-    results = []
-    for msg in messages[offset:]:
-        if msg.get("role") != "tool":
-            continue
-        if msg.get("effect_disposition") == "unknown":
-            raise RecoveryConflict("Native Hermes tool effect requires verification")
-        results.append({"id": msg["tool_call_id"], "content": msg["content"]})
-    return matrix.message_finish_tools(identity, operation, results)
+    # Only the resolver installed by our current native frame delegates to the
+    # canonical authority. A similarly named external MCP tool does not.
+    from hermes_matrix.public_tasks import current_turn, is_canonical_task_call
+    public = current_turn.get()
+    canonical = [call for call in assistant.tool_calls if public and is_canonical_task_call(call)]
+    business = [call for call in assistant.tool_calls if call not in canonical]
+    saved = None
+    if business:
+        calls = [{"id": call.id, "name": call.function.name, "arguments": call.function.arguments} for call in business]
+        operation = matrix.message_begin_tools(identity, calls)
+        selected = copy(assistant)
+        selected.tool_calls = business
+        offset = len(messages)
+        native(agent, selected, messages, effective_task_id, api_call_count)
+        results = []
+        for msg in messages[offset:]:
+            if msg.get("role") != "tool":
+                continue
+            if msg.get("effect_disposition") == "unknown":
+                raise RecoveryConflict("Native Hermes tool effect requires verification")
+            results.append({"id": msg["tool_call_id"], "content": msg["content"]})
+        saved = matrix.message_finish_tools(identity, operation, results)
+    if canonical:
+        selected = copy(assistant)
+        selected.tool_calls = canonical
+        native(agent, selected, messages, effective_task_id, api_call_count)
+    return saved or matrix.message_current(identity)
 
 
 def install_ordinary_guard():
