@@ -29,3 +29,24 @@ def test_assistant_wakes_through_teams_and_rejects_replaced_role(monkeypatch):
         f.context["owner"] = "replaced"
         asyncio.run(adapter._on_matrix_input(event))
         assert adapter._dispatch_coordination.await_count == 1
+
+
+def test_assistant_native_output_is_silent_but_approvals_remain_visible(monkeypatch):
+    module, _native, adapter = fixture(monkeypatch)
+    sent = AsyncMock(return_value="$approval")
+    adapter._client = SimpleNamespace(send_message_event=sent)
+    adapter._user_id = "@leader:test"
+    adapter._session_receipts = None
+    adapter._direct_runs = {}
+    adapter._wrap_send_message_event()
+
+    async def run():
+        token = module._coordination_turn.set("assistant_digest")
+        try:
+            assert await adapter._client.send_message_event("!assistant:test", "m.room.message", {"msgtype":"m.text","body":"No updates"}) is None
+            sent.assert_not_awaited()
+            await adapter._client.send_message_event("!assistant:test", "m.room.message", {"msgtype":"m.text","body":"Approve?","org.agentteams.approval":{"request_id":"one"}})
+            sent.assert_awaited_once()
+        finally:
+            module._coordination_turn.reset(token)
+    asyncio.run(run())

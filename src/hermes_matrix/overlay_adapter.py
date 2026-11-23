@@ -479,7 +479,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
 
     async def _process_managed_message(self, event, session_key):
         if "org.agentteams.coordination" in (event.raw_message or {}) or getattr(event, "_agentteams_recovery", None):
-            token = _coordination_turn.set(True)
+            kind = (getattr(event, "_task_protocol_meta", None) or {}).get("teamharness_coordination", {}).get("kind")
+            token = _coordination_turn.set(kind or True)
             try:
                 return await super()._process_message_background(event, session_key)
             finally:
@@ -684,6 +685,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
             **kwargs: Any,
         ) -> Any:
             if isinstance(content, dict):
+                if _coordination_turn.get() == "assistant_digest" and "org.agentteams.approval" not in content:
+                    return None
                 apply_outbound_mentions(content, self_user_id=self._user_id)
                 if _coordination_turn.get():
                     content["org.agentteams.progress_only"] = True
