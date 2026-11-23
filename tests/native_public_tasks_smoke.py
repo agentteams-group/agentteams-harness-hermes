@@ -133,7 +133,8 @@ class NativePublicTaskSmoke(TestCase):
             self.assertEqual(span.attributes["agentteams.event.id"], "$source")
             self.assertEqual(span.attributes["agentteams.coordination.id"], "c" * 32)
             self.assertEqual(span.attributes["agentteams.execution.generation"], 3)
-        self.assertEqual(tuple(model.attributes["agentteams.input.event_ids"]), ("$source",))
+        # Assignment notifications carry a Task identity, but are not Human input sources.
+        self.assertEqual(tuple(model.attributes["agentteams.input.event_ids"]), ())
         self.assertEqual(model.attributes["gen_ai.usage.input_tokens"], 1)
         self.assertEqual(model.attributes["gen_ai.usage.output_tokens"], 1)
         self.assertEqual(model.parent.span_id, root.context.span_id)
