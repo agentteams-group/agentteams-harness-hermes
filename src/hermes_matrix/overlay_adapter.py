@@ -442,7 +442,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
                             await phase.notify(public_event["id"], event.message_id, "retry")
                         raise RuntimeError("Public Task context is unavailable; no model turn was started")
                 role = os.getenv("AGENTTEAMS_AGENT_ROLE", "worker")
-                if role in {"manager", "leader", "team_leader"}:
+                if role in {"manager", "leader", "team_leader"} and (public_event or {}).get("kind") != "assistant_digest":
                     arguments = {"operation": "roster", "role": role}
                     if role != "manager":
                         import yaml
