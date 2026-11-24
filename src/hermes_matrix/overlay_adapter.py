@@ -368,7 +368,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
                 self._pending_matrix.running.add(matrix_event_key(str(event.room_id), str(event.event_id)))
 
     async def _dispatch_coordination(self, event, packet):
-        # The receipt admits the Leader's self-addressed closure without
+        # The receipt admits your self-addressed control input without
         # weakening the native own-echo policy for ordinary messages.
         # A real Matrix event starts the native thread/session. Keep opaque
         # Controller receipt session IDs out of Matrix transport thread IDs.
@@ -376,11 +376,11 @@ class MatrixAdapter(_NativeMatrixAdapter):
             user_id=str(event.sender), thread_id=str(event.event_id))
         from gateway.platforms.event import MessageEvent
         content = event.content if isinstance(event.content, dict) else event.content.serialize()
-        own_closure = (str(event.sender) == str(self._user_id)
-                       and packet["meta"]["teamharness_coordination"]["kind"] == "main_task_ready")
+        own_control = (str(event.sender) == str(self._user_id)
+                       and packet["meta"]["teamharness_coordination"]["kind"] in {"main_task_ready", "assistant_digest"})
         message = MessageEvent(text=packet["text"], source=source,
             message_id=str(event.event_id), raw_message=content,
-            internal=own_closure, allow_gateway_control=False)
+            internal=own_control, allow_gateway_control=False)
         message._task_protocol_meta = packet["meta"]
         await self.handle_message(message)
         return getattr(message, "_gateway_accepted", False)
@@ -442,7 +442,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
                             await phase.notify(public_event["id"], event.message_id, "retry")
                         raise RuntimeError("Public Task context is unavailable; no model turn was started")
                 role = os.getenv("AGENTTEAMS_AGENT_ROLE", "worker")
-                if role in {"manager", "leader", "team_leader"}:
+                if role in {"manager", "leader", "team_leader"} and (public_event or {}).get("kind") != "assistant_digest":
                     arguments = {"operation": "roster", "role": role}
                     if role != "manager":
                         import yaml
@@ -479,7 +479,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
 
     async def _process_managed_message(self, event, session_key):
         if "org.agentteams.coordination" in (event.raw_message or {}) or getattr(event, "_agentteams_recovery", None):
-            token = _coordination_turn.set(True)
+            kind = (getattr(event, "_task_protocol_meta", None) or {}).get("teamharness_coordination", {}).get("kind")
+            token = _coordination_turn.set(kind or True)
             try:
                 return await super()._process_message_background(event, session_key)
             finally:
@@ -684,6 +685,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
             **kwargs: Any,
         ) -> Any:
             if isinstance(content, dict):
+                if _coordination_turn.get() == "assistant_digest" and "org.agentteams.approval" not in content:
+                    return None
                 apply_outbound_mentions(content, self_user_id=self._user_id)
                 if _coordination_turn.get():
                     content["org.agentteams.progress_only"] = True
