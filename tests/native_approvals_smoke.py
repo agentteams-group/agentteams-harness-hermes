@@ -62,6 +62,9 @@ class NativeApprovalSmoke(unittest.IsolatedAsyncioTestCase):
                     persisted.append("control")
                 with patch.dict(os.environ, {"AGENTTEAMS_ADMIN_USER": "admin", "AGENTTEAMS_MATRIX_DOMAIN": "matrix"}):
                     await transport.answer("!room", "@admin:matrix" if action == "approve" else "@owner", "@worker " + body,
+                        content={"com.agentteams.answer": {"kind": "tool_approval", "agent_id": "@worker",
+                            "confirmation_id": data["request_id"], "context_id": data["context_id"],
+                            "answer": "approved" if action == "approve" else "rejected"}}, agent_id="@worker",
                         before_answer=persist)
                 self.assertEqual(persisted, ["control"])
                 result = await asyncio.wait_for(wait, 10)

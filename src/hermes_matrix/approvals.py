@@ -35,6 +35,7 @@ class MatrixApprovals:
             return SendResult(success=False, error="Approval is no longer pending")
         data = {
             "version": 1, "runtime": "hermes", "request_id": prompt.request_id,
+            "reply_format": "com.agentteams.answer",
             "context_id": context, "status": "pending", "tool_name": "terminal",
             "parameters": json.dumps({"command": prompt.command}, ensure_ascii=False),
             "risk_details": prompt.description,
@@ -57,7 +58,15 @@ class MatrixApprovals:
         event_id = await self.send(prompt.chat_id, prompt.text, data)
         return SendResult(success=True, message_id=str(event_id))
 
-    async def answer(self, room_id, sender, body, *, before_answer=None):
+    async def answer(self, room_id, sender, body, *, content=None, agent_id=None, before_answer=None):
+        if isinstance((content or {}).get("com.agentteams.answer"), dict) and content["com.agentteams.answer"].get("kind") == "tool_approval":
+            from runtime_hitl import approval_decision
+            control = approval_decision(content, agent_id)
+            if control is not None:
+                if not control:
+                    return True
+                request_id, context, approved = control
+                body = f"/agentteams-approval {'approve' if approved else 'deny'} {request_id} {context}"
         match = COMMAND.fullmatch(re.sub(r"^(?:@\S+\s+)+", "", body.strip()))
         if not match:
             return False
