@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import asyncio
 import sys
 import types
 from pathlib import Path
@@ -24,6 +25,7 @@ def test_register_swaps_bundled_adapter_and_delegates(monkeypatch) -> None:
 
     native = types.ModuleType("plugins.platforms.matrix.adapter")
     native.MatrixAdapter = native_adapter_class
+    native._standalone_send = object()
 
     def native_register(ctx):
         calls.append(("register", native.MatrixAdapter))
@@ -45,6 +47,44 @@ def test_register_swaps_bundled_adapter_and_delegates(monkeypatch) -> None:
 
     assert calls == [("register", overlay_adapter_class)]
     assert native.MatrixAdapter is overlay_adapter_class
+
+
+def test_registered_standalone_sender_refuses_required_encryption(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    sender = AsyncMock(return_value={"success": True, "message_id": "$plain"})
+    native = SimpleNamespace(
+        MatrixAdapter=object(), _standalone_send=sender,
+        _resolve_e2ee_mode=lambda extra: extra.get("e2ee_mode", "required"),
+        send_error=lambda message: {"success": False, "error": message},
+    )
+    registrations = []
+    native.register = lambda ctx: registrations.append(native._standalone_send)
+    matrix = types.ModuleType("plugins.platforms.matrix")
+    matrix.adapter = native
+    overlay = types.ModuleType("hermes_matrix.overlay_adapter")
+    overlay.MatrixAdapter = object()
+    monkeypatch.setitem(sys.modules, "plugins", types.ModuleType("plugins"))
+    monkeypatch.setitem(sys.modules, "plugins.platforms", types.ModuleType("plugins.platforms"))
+    monkeypatch.setitem(sys.modules, "plugins.platforms.matrix", matrix)
+    monkeypatch.setitem(sys.modules, "hermes_matrix.overlay_adapter", overlay)
+    plugin = _load_plugin_module()
+    plugin.register(object())
+    assert native._standalone_send is sender
+
+    async def scenario():
+        guarded = registrations[0]
+        for mode in ("required", None):
+            result = await guarded(SimpleNamespace(extra={"e2ee_mode": mode} if mode else {}), "!room:test", "secret")
+            assert result["success"] is False
+            assert "encrypted gateway" in result["error"]
+        sender.assert_not_awaited()
+        result = await guarded(SimpleNamespace(extra={"e2ee_mode": "off"}), "!room:test", "plain", thread_id="thread")
+        assert result["success"] is True
+        sender.assert_awaited_once_with(SimpleNamespace(extra={"e2ee_mode": "off"}), "!room:test", "plain", thread_id="thread")
+
+    asyncio.run(scenario())
 
 
 def test_matrix_plugin_package_exports_register(monkeypatch):

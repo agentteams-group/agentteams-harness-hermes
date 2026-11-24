@@ -20,4 +20,19 @@ def register(ctx) -> None:
     from hermes_matrix.overlay_adapter import MatrixAdapter
 
     native.MatrixAdapter = MatrixAdapter
-    native.register(ctx)
+    sender = native._standalone_send
+
+    async def standalone_send(pconfig, chat_id, message, **kwargs):
+        # The standalone HTTP sender has no crypto store. Never downgrade a
+        # required-E2EE cron/notification to a plaintext m.room.message.
+        if native._resolve_e2ee_mode(getattr(pconfig, "extra", {}) or {}) == "required":
+            return native.send_error(
+                "Matrix standalone delivery requires the running encrypted gateway when E2EE is required"
+            )
+        return await sender(pconfig, chat_id, message, **kwargs)
+
+    native._standalone_send = standalone_send
+    try:
+        native.register(ctx)
+    finally:
+        native._standalone_send = sender

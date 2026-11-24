@@ -20,6 +20,7 @@ test:
 	python3 -m pytest tests -q
 
 smoke:
+	docker run --rm --network none --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/candidate/src:/opt/agentteams/scripts/lib -v "$(CURDIR):/candidate:ro" $(IMAGE):$(VERSION) /candidate/tests/native_standalone_e2ee_smoke.py
 	docker run --rm --entrypoint /opt/venv/hermes/bin/python -v "$(CURDIR)/tests/upstream_smoke.py:/tmp/upstream_smoke.py:ro" $(IMAGE):$(VERSION) /tmp/upstream_smoke.py
 	docker run --rm --entrypoint /opt/venv/hermes/bin/python -v "$(CURDIR)/tests/native_approvals_smoke.py:/tmp/native_approvals_smoke.py:ro" $(IMAGE):$(VERSION) /tmp/native_approvals_smoke.py
 
