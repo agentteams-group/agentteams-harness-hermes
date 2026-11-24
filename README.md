@@ -143,3 +143,13 @@ mocked Controller requests. They do not establish real Task/model continuation,
 ordinary-room message recovery, native sync cursor/backfill integration, the
 complete fault suite or cross-Harness switching. Those remain tracked in
 [AgentTeams #1631](https://github.com/agentscope-ai/AgentTeams/issues/1631).
+# Matrix standalone notifications
+
+With `e2ee_mode: required` (or the equivalent Matrix encryption setting),
+standalone cron delivery returns an explicit failure before sending HTTP.
+Use the running encrypted gateway for these messages. The standalone sender
+has no crypto store and cannot safely deliver required-E2EE messages; an
+explicit `e2ee_mode: off` retains the native plaintext delivery behavior.
+This guard belongs to this Harness's native Matrix plugin. The retired Core
+Hermes adapter is a separate implementation and is not used by this image.
+
