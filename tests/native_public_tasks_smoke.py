@@ -103,7 +103,7 @@ class NativePublicTaskSmoke(TestCase):
         agent = self.agent(f"http://127.0.0.1:{server.server_port}/v1")
         with task_turn(self.event, self.prepared):
             result = agent.run_conversation("Perform this own synthetic task", persist_user_platform_id="$source")
-        self.assertIn("Delivery and acceptance are not yet confirmed", result["final_response"])
+        self.assertEqual(result["final_response"], "NO_REPLY")
         self.assertTrue(result["completed"])
         self.assertFalse(result["interrupted"])
         self.assertEqual(len(requests), 2 if getattr(self, "invalid_first", False) else 1)

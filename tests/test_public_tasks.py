@@ -36,7 +36,8 @@ def test_native_tool_result_keeps_cli_result_and_adds_verified_fact(modules, mon
     with public_tasks.task_turn(event()) as turn:
         answer = json.loads(turn.invoke({"action": "create", "leader": "leader", "title": "own request"}))
         assert answer["task"] == result["task"]
-        assert answer == result
+        assert answer['sourceEventId'] == result['sourceEventId']
+        assert '[Task system receipt]' in answer['fact']
         assert "queued" in turn.prompt()
         assert captured[0]["_nativeSource"] == {"eventId": "$source", "userId": "@human:test", "roomId": "!room:test"}
         assert public_tasks.current_turn.get() is turn
@@ -88,6 +89,31 @@ def test_review_exposes_only_common_task_operations(modules):
     with public_tasks.task_turn(event(), {"review": ["execution", "submission"]}) as turn:
         turn.bind(agent, "review-session", [])
         assert agent.valid_tool_names == {public_tasks.TASK_TOOL}
+
+
+def test_prepared_model_context_keeps_references_without_file_previews(modules):
+    prepared = {'fact': 'Own assignment', 'context': {'inputs': [{'files': [
+        {'path': '/verified/result.json', 'preview': 'Entire upstream file body'}]}]}}
+    with public_tasks.task_turn(event(), prepared) as turn:
+        assert '/verified/result.json' in turn.prompt()
+        assert 'Entire upstream file body' not in turn.prompt()
+    assert prepared['context']['inputs'][0]['files'][0]['preview'] == 'Entire upstream file body'
+
+
+def test_terminal_native_result_keeps_actual_send_without_chat_receipt(modules, monkeypatch):
+    extra = {'receiptId': 'actual-send', 'fact': '[Task handoff receipt]\nActual Matrix send'}
+    monkeypatch.setattr(modules, 'invoke', lambda _: {'phaseComplete': True, 'receiptId': 'submission',
+        'fact': 'Submission saved', 'extraReceipts': [extra],
+        'result': {'task': {'id': 'own', 'status': 'completed', 'spec': 'Repeated full snapshot'}}})
+    own = event()
+    own._task_protocol_meta = {'agent_matrix_user_id': '@worker:test'}
+    with public_tasks.task_turn(own, {'execution': 'own'}) as turn:
+        answer = json.loads(turn.invoke({'action': 'submit', 'taskId': 'own', 'summary': 'Done'}))
+        assert turn.context['actor'] == '@worker:test'
+        assert answer['extraReceipts'] == [extra]
+        assert 'Repeated full snapshot' not in json.dumps(answer)
+        assert turn.receipts['actual-send'] == extra['fact']
+        assert turn.phase_complete and turn.display_text == 'NO_REPLY'
 
 
 def test_refreshed_input_must_be_saved_and_read_back_before_creation_resumes(modules):

@@ -55,6 +55,7 @@ def test_assistant_native_output_is_silent_but_approvals_remain_visible(monkeypa
 def test_assistant_keeps_native_trace_context_without_loading_task_roster(monkeypatch, tmp_path):
     from hermes_matrix import public_tasks
     _module, _native, adapter = fixture(monkeypatch)
+    adapter._user_id = '@lead:test'
     monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller.test")
     monkeypatch.setenv("AGENTTEAMS_PLUGIN_DIR", str(core / "plugins/teamharness"))
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "team_leader")

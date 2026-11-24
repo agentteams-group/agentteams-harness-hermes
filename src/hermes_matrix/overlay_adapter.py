@@ -449,6 +449,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
                         runtime = yaml.safe_load(Path(os.environ["TEAMHARNESS_RUNTIME_CONFIG"]).read_text())
                         arguments["team"] = runtime["team"]["name"]
                     prepared["roster"] = await asyncio.to_thread(common("task_native").invoke, arguments)
+                event._task_protocol_meta = {**(getattr(event, "_task_protocol_meta", {}) or {}),
+                    "agent_matrix_user_id": str(self._user_id)}
                 with task_turn(event, prepared):
                     if public_event:
                         trace_event("coordination.native_begin", event_id=event.message_id,
