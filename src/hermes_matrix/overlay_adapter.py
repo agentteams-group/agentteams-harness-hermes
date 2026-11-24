@@ -734,6 +734,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
             return None
 
         if await self._dashboard_approvals.answer(room_id, sender, body,
+                content=source_content, agent_id=self._user_id,
                 before_answer=lambda: self._accept_matrix_input(room_id, sender, event_id, source_content, "control")):
             return None
 
