@@ -17,6 +17,7 @@ def _load_overlay_with_fake_gateway(monkeypatch):
 
     class FakeNative:
         def __init__(self):
+            self._user_id = "@worker:test"
             self.resolve_calls = 0
             self.text_calls = 0
             self.build_ctx = None
