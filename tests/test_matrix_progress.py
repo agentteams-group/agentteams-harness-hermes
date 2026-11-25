@@ -5,6 +5,19 @@ from types import SimpleNamespace
 from hermes_matrix.progress import MatrixProgress
 
 
+def test_native_failure_survives_gateway_error_handling():
+    async def check():
+        sent = []
+        async def send(room, content):
+            sent.append(content)
+            return '$failed'
+        display = MatrixProgress(send, SimpleNamespace(message_id='$source', source=SimpleNamespace(chat_id='!task')))
+        display.failed = True
+        await display.finish()
+        assert sent[0]['org.agentteams.run']['blocks'][0]['kind'] == 'failed'
+    asyncio.run(check())
+
+
 def test_parallel_same_name_calls_keep_exact_ids_results_and_one_run():
     if importlib.util.find_spec('agent') is None:
         import pytest
