@@ -101,7 +101,7 @@ class NativePublicTaskSmoke(TestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         agent = self.agent(f"http://127.0.0.1:{server.server_port}/v1")
-        with task_turn(self.event, self.prepared):
+        with task_turn(self.event, self.prepared, progress=getattr(self, "progress", None)):
             result = agent.run_conversation("Perform this own synthetic task", persist_user_platform_id="$source")
         self.assertEqual(result["final_response"], "NO_REPLY")
         self.assertTrue(result["completed"])
@@ -112,6 +112,18 @@ class NativePublicTaskSmoke(TestCase):
                             for row in self.db.get_messages(agent.session_id)))
         self.assertTrue(any(row.get("role") == "tool" and "saved-submission" in str(row.get("content"))
                             for row in self.db.get_messages(agent.session_id)))
+
+    def test_native_progress_publisher_keeps_exact_parallel_results(self):
+        from test_matrix_progress import test_parallel_same_name_calls_keep_exact_ids_results_and_one_run
+        test_parallel_same_name_calls_keep_exact_ids_results_and_one_run()
+
+    def test_native_task_tool_progress_uses_actual_ids_and_restores_callbacks(self):
+        self.progress = Mock()
+        self.test_actual_native_model_wire_and_tool_receipt_are_bound()
+        self.progress.tool_started.assert_called_once_with('call-task-1', TASK_TOOL,
+            {'action': 'submit', 'taskId': 'own', 'summary': 'fixture'})
+        self.progress.tool_completed.assert_called_once()
+        self.assertEqual(self.progress.tool_completed.call_args.args[:3], self.progress.tool_started.call_args.args)
 
     def test_task_turn_does_not_spawn_an_auxiliary_title_model(self):
         with patch("agent.memory_provider.spawn_context_thread") as spawn:
