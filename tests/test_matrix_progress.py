@@ -1,10 +1,14 @@
 import asyncio
+import importlib.util
 from types import SimpleNamespace
 
 from hermes_matrix.progress import MatrixProgress
 
 
 def test_parallel_same_name_calls_keep_exact_ids_results_and_one_run():
+    if importlib.util.find_spec('agent') is None:
+        import pytest
+        pytest.skip('Requires the installed Hermes SDK; also run by native_public_tasks_smoke')
     async def check():
         sent = []
         async def send(room, content):

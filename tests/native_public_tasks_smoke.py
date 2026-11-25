@@ -113,6 +113,10 @@ class NativePublicTaskSmoke(TestCase):
         self.assertTrue(any(row.get("role") == "tool" and "saved-submission" in str(row.get("content"))
                             for row in self.db.get_messages(agent.session_id)))
 
+    def test_native_progress_publisher_keeps_exact_parallel_results(self):
+        from test_matrix_progress import test_parallel_same_name_calls_keep_exact_ids_results_and_one_run
+        test_parallel_same_name_calls_keep_exact_ids_results_and_one_run()
+
     def test_native_task_tool_progress_uses_actual_ids_and_restores_callbacks(self):
         self.progress = Mock()
         self.test_actual_native_model_wire_and_tool_receipt_are_bound()
