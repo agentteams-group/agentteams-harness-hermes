@@ -311,8 +311,12 @@ class MatrixAdapter(_NativeMatrixAdapter):
             return
         from worker_matrix_state import WorkerMatrix
         source = _matrix_source_event.get()
+        timestamp = getattr(source, "timestamp", None)
+        if timestamp is None and str(getattr(source, "type", "")) == "org.agentteams.coordination":
+            # Mautrix preserves custom event timestamps in its wire representation.
+            timestamp = source.serialize().get("origin_server_ts")
         decoded = {"sender": sender, "type": str(getattr(source, "type", "m.room.message")),
-            "origin_server_ts": int(getattr(source, "timestamp", 0) or 0), "content": content}
+            "origin_server_ts": int(timestamp or 0), "content": content}
         shared = getattr(self, "_shared_sync", None)
         if shared is not None:
             from hermes_matrix.sync_state import current_admission

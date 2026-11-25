@@ -137,6 +137,7 @@ class NativeSyncTests(unittest.IsolatedAsyncioTestCase):
         assert self.admitted == ["$wake"]
         assert len(self.matrix.last_inputs) == 1
         assert self.matrix.last_inputs[0]["input"]["type"] == raw["type"]
+        assert self.matrix.last_inputs[0]["input"]["origin_server_ts"] == raw["origin_server_ts"]
 
     async def test_real_dispatch_retains_server_order_before_native_cursor(self):
         put = self.client.sync_store.put_next_batch
