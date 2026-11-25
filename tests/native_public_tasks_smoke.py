@@ -117,6 +117,10 @@ class NativePublicTaskSmoke(TestCase):
         from test_matrix_progress import test_parallel_same_name_calls_keep_exact_ids_results_and_one_run
         test_parallel_same_name_calls_keep_exact_ids_results_and_one_run()
 
+    def test_native_progress_publisher_survives_caught_failure(self):
+        from test_matrix_progress import test_native_failure_survives_gateway_error_handling
+        test_native_failure_survives_gateway_error_handling()
+
     def test_native_task_tool_progress_uses_actual_ids_and_restores_callbacks(self):
         self.progress = Mock()
         self.test_actual_native_model_wire_and_tool_receipt_are_bound()
@@ -143,6 +147,16 @@ class NativePublicTaskSmoke(TestCase):
         self.assertIsNone(self.db.get_session_title(second.session_id))
         self.assertEqual(self.db.get_session_title(first.session_id), "independent-tests")
         spawn.assert_not_called()
+
+    def test_native_preflight_failure_marks_the_process_before_gateway_error_handling(self):
+        agent = self.agent()
+        progress = Mock(failed=False)
+        with task_turn(self.event, self.prepared, progress=progress), patch(
+                "agent.turn_context._maybe_title_session_at_turn_start",
+                side_effect=RuntimeError("native preflight failed")):
+            with self.assertRaisesRegex(RuntimeError, "native preflight failed"):
+                agent.run_conversation("Execute the assigned tests")
+        self.assertTrue(progress.failed)
 
     def test_ordinary_conversation_retains_native_title_generation(self):
         from agent import turn_context

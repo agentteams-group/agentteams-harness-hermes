@@ -22,6 +22,7 @@ class MatrixProgress:
         self.loop = asyncio.get_running_loop()
         self.lock, self.reasoning_lock = asyncio.Lock(), threading.Lock()
         self.pending, self.calls, self.reasoning_text = [], {}, ''
+        self.failed = False
 
     def submit(self, operation):
         self.pending.append(asyncio.run_coroutine_threadsafe(operation, self.loop))
@@ -69,6 +70,7 @@ class MatrixProgress:
             self.calls.setdefault(key, {'event_id': event_id, 'started_at': block.get('started_at')})
 
     async def finish(self, *, failed=False):
+        failed = failed or self.failed
         from runtime_observability import redact
         text = redact(self.take_reasoning())[:4096]
         if text:

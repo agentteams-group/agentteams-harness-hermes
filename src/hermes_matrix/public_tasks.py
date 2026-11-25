@@ -249,11 +249,23 @@ def task_turn(event, prepared=None, progress=None):
 def install():
     """Use pinned native call sites; persistence failures must not fail open."""
     from agent import turn_context, conversation_loop
+    from agent.turn_facade import TurnFacadeMixin
     from run_agent import AIAgent
     import model_tools
     original = turn_context._collect_pre_llm_call_context
     if getattr(original, "_agentteams_public_tasks", False):
         return
+
+    native_conversation = TurnFacadeMixin.run_conversation
+    @wraps(native_conversation)
+    def task_conversation(agent, *args, **kwargs):
+        try:
+            return native_conversation(agent, *args, **kwargs)
+        except BaseException:
+            turn = current_turn.get()
+            if turn and turn.progress:
+                turn.progress.failed = True
+            raise
 
     title_session = turn_context._maybe_title_session_at_turn_start
     @wraps(title_session)
@@ -375,6 +387,7 @@ def install():
     prepare._agentteams_public_tasks = True
     turn_context._collect_pre_llm_call_context = prepare
     turn_context._maybe_title_session_at_turn_start = task_title
+    TurnFacadeMixin.run_conversation = task_conversation
     AIAgent._build_api_kwargs = wire
     AIAgent._interruptible_api_call = traced_provider(AIAgent._interruptible_api_call)
     AIAgent._interruptible_streaming_api_call = traced_provider(AIAgent._interruptible_streaming_api_call)
