@@ -46,9 +46,9 @@ class NativePublicTaskSmoke(TestCase):
             "task_id": "own", "main_task_id": "main", "project_id": "", "delivery_id": "dispatch"}})
         install()
 
-    def agent(self, url="http://127.0.0.1:1/v1"):
+    def agent(self, url="http://127.0.0.1:1/v1", session_id="native-public-task"):
         agent = AIAgent(model="public-task-fixture", api_key="synthetic", provider="custom", base_url=url,
-            platform="matrix", chat_id="!fixture:test", session_id="native-public-task", session_db=self.db,
+            platform="matrix", chat_id="!fixture:test", session_id=session_id, session_db=self.db,
             skip_memory=True, skip_context_files=True, skip_background_review=True,
             enabled_toolsets=[], quiet_mode=True, max_iterations=3)
         agent._cached_system_prompt = "Own synthetic SDK fixture."
@@ -128,6 +128,20 @@ class NativePublicTaskSmoke(TestCase):
     def test_task_turn_does_not_spawn_an_auxiliary_title_model(self):
         with patch("agent.memory_provider.spawn_context_thread") as spawn:
             self.test_actual_native_model_wire_and_tool_receipt_are_bound()
+        spawn.assert_not_called()
+
+    def test_repeated_task_titles_do_not_block_native_execution(self):
+        from agent import turn_context
+        first = self.agent(session_id="earlier-task")
+        self.db.set_session_title(first.session_id, "independent-tests")
+        second = self.agent(session_id="current-task")
+        self.db.set_session_title(second.session_id, "")
+        self.prepared["context"]["task"]["title"] = "independent-tests"
+        with task_turn(self.event, self.prepared), patch("agent.memory_provider.spawn_context_thread") as spawn:
+            turn_context._maybe_title_session_at_turn_start(second,
+                [{"role": "user", "content": "Execute the assigned tests"}])
+        self.assertIsNone(self.db.get_session_title(second.session_id))
+        self.assertEqual(self.db.get_session_title(first.session_id), "independent-tests")
         spawn.assert_not_called()
 
     def test_ordinary_conversation_retains_native_title_generation(self):

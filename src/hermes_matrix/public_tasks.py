@@ -263,12 +263,7 @@ def install():
                           or turn.context.get("review") or turn.context.get("completion"))
         if not scope:
             return title_session(agent, messages, title_user_message)
-        if agent._session_db:
-            agent._ensure_db_session()
-            if not agent._session_db.get_session_title(agent.session_id):
-                task = (turn.context.get("context") or {}).get("task") or {}
-                agent._session_db.set_session_title(agent.session_id,
-                    task.get("title") or "Task " + str(scope))
+        # The Task room already owns its name; native titles are globally unique.
 
     @wraps(original)
     def prepare(agent, **kwargs):
