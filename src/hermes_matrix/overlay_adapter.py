@@ -451,11 +451,27 @@ class MatrixAdapter(_NativeMatrixAdapter):
                     prepared["roster"] = await asyncio.to_thread(common("task_native").invoke, arguments)
                 event._task_protocol_meta = {**(getattr(event, "_task_protocol_meta", {}) or {}),
                     "agent_matrix_user_id": str(self._user_id)}
-                with task_turn(event, prepared):
-                    if public_event:
-                        trace_event("coordination.native_begin", event_id=event.message_id,
-                                    coordination_id=public_event.get("id", ""), phase=public_event["kind"])
-                    return await self._process_native_message_background(event, session_key)
+                from hermes_matrix.progress import MatrixProgress, current_progress
+                display = None if (public_event or {}).get('kind') == 'assistant_digest' else MatrixProgress(self._send_room_message, event)
+                display_token = current_progress.set(display)
+                failed = False
+                try:
+                    with task_turn(event, prepared, progress=display):
+                        if public_event:
+                            trace_event("coordination.native_begin", event_id=event.message_id,
+                                        coordination_id=public_event.get("id", ""), phase=public_event["kind"])
+                        return await self._process_native_message_background(event, session_key)
+                except BaseException:
+                    failed = True
+                    raise
+                finally:
+                    try:
+                        if display:
+                            await display.finish(failed=failed)
+                    except Exception:
+                        logger.exception('Matrix native progress delivery failed')
+                    finally:
+                        current_progress.reset(display_token)
             except BaseException as error:
                 if public_event and not isinstance(error, asyncio.CancelledError):
                     trace_event("coordination.native_error", event_id=event.message_id,
@@ -687,6 +703,12 @@ class MatrixAdapter(_NativeMatrixAdapter):
             **kwargs: Any,
         ) -> Any:
             if isinstance(content, dict):
+                from hermes_matrix.progress import current_progress
+                display = current_progress.get()
+                if display:
+                    content['org.agentteams.run_id'] = display.run_id
+                    if isinstance(content.get('m.new_content'), dict):
+                        content['m.new_content']['org.agentteams.run_id'] = display.run_id
                 if _coordination_turn.get() == "assistant_digest" and "org.agentteams.approval" not in content:
                     return None
                 apply_outbound_mentions(content, self_user_id=self._user_id)

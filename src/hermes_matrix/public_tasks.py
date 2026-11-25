@@ -47,7 +47,7 @@ def common(name):
 
 
 class TaskTurn:
-    def __init__(self, event, prepared=None):
+    def __init__(self, event, prepared=None, progress=None):
         meta = {"room_id": event.source.chat_id, "sender_id": event.source.user_id,
                 "event_id": event.message_id}
         meta.update(getattr(event, "_task_protocol_meta", {}) or {})
@@ -70,6 +70,7 @@ class TaskTurn:
         self.bound = False
         self.lock = threading.Lock()
         self.previous_tools = None
+        self.progress, self.previous_callbacks = progress, {}
         self.receipts = {}
         self.phase_complete = False
         self.display_text = "NO_REPLY"
@@ -100,6 +101,29 @@ class TaskTurn:
         if self.bound:
             return
         self.bound = True
+        if self.progress:
+            for name, callback in [('tool_start_callback', self.progress.tool_started),
+                                   ('tool_complete_callback', self.progress.tool_completed),
+                                   ('reasoning_callback', self.progress.reasoning)]:
+                previous = getattr(agent, name, None)
+                self.previous_callbacks[name] = (agent, previous)
+                def composed(*args, _previous=previous, _callback=callback, **kwargs):
+                    if _previous:
+                        _previous(*args, **kwargs)
+                    _callback(*args, **kwargs)
+                setattr(agent, name, composed)
+            previous = getattr(agent, 'tool_progress_callback', None)
+            self.previous_callbacks['tool_progress_callback'] = (agent, previous)
+            def native_progress(event_type, tool_name=None, preview=None, args=None, **kwargs):
+                if event_type in {'tool.started', 'tool.completed'}:
+                    return
+                if event_type == '_thinking' or tool_name == '_thinking':
+                    if preview:
+                        self.progress.reasoning(preview)
+                    return
+                if previous:
+                    return previous(event_type, tool_name=tool_name, preview=preview, args=args, **kwargs)
+            agent.tool_progress_callback = native_progress
         schema = common("task_native").invoke({"operation": "schema", "role": self.context["role"]})
         self.previous_tools = (agent, agent.tools, agent.valid_tool_names)
         tools = [tool for tool in agent.tools if tool.get("function", {}).get("name") not in LEGACY_TASK_TOOLS | {TASK_TOOL}]
@@ -197,6 +221,8 @@ class TaskTurn:
         self.context.pop("inputRefreshPending", None)
 
     def close(self):
+        for name, (agent, callback) in self.previous_callbacks.items():
+            setattr(agent, name, callback)
         if self.previous_tools:
             agent, tools, names = self.previous_tools
             agent.tools, agent.valid_tool_names = tools, names
@@ -210,8 +236,8 @@ class TaskTurn:
 
 
 @contextmanager
-def task_turn(event, prepared=None):
-    turn = TaskTurn(event, prepared)
+def task_turn(event, prepared=None, progress=None):
+    turn = TaskTurn(event, prepared, progress)
     token = current_turn.set(turn)
     try:
         yield turn
