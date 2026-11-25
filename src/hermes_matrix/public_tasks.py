@@ -61,7 +61,8 @@ class TaskTurn:
             sources = common("task_receipt").creation_sources(meta)
         self.context = dict(prepared or {})
         self.context.update(role=os.getenv("AGENTTEAMS_AGENT_ROLE", "worker"),
-                            sources=sources, sourceEvent=event.message_id)
+                            sources=sources, sourceEvent=event.message_id,
+                            actor=meta.get("agent_matrix_user_id", ""))
         self.event = event
         self.meta = meta
         self.pending = []
@@ -71,6 +72,7 @@ class TaskTurn:
         self.previous_tools = None
         self.receipts = {}
         self.phase_complete = False
+        self.display_text = "NO_REPLY"
         self.model_input_ids = []
 
     def task_journal(self, action, **fields):
@@ -151,7 +153,8 @@ class TaskTurn:
         path = Path(os.environ["AGENTTEAMS_PLUGIN_DIR"]) / "skills/team/task-management/SKILL.md"
         pieces = [path.read_text(), "[Task input references]\n" + json.dumps(self.context["sources"])]
         if self.context.get("fact"):
-            pieces.append(self.context["fact"] + "\n" + json.dumps(self.context.get("context"), default=str))
+            pieces.append(self.context["fact"] + "\n" + json.dumps(
+                common("task_context").model_context(self.context.get("context") or {}), default=str))
         if self.context.get("roster"):
             pieces.append("[Registered public team identities]\n" + json.dumps(self.context["roster"]))
         pieces.extend(self.receipts.values())
@@ -163,9 +166,13 @@ class TaskTurn:
             self.context.update(outcome.get("contextUpdate") or {})
             self.pending.extend(outcome.get("refreshedInputs") or [])
             self.phase_complete = self.phase_complete or outcome.get("phaseComplete") is True
-            result = dict(outcome["result"])
+            if outcome.get("phaseComplete"):
+                self.display_text = outcome.get("displayText", "NO_REPLY")
+            result = common("task_native").model_result(outcome)
             if outcome.get("fact") and outcome.get("receiptId"):
                 self.receipts.setdefault(outcome["receiptId"], outcome["fact"])
+                for receipt in outcome.get("extraReceipts", []):
+                    self.receipts.setdefault(receipt["receiptId"], receipt["fact"])
             elif outcome.get("refreshedInputs"):
                 self.receipts[json.dumps([source["eventId"] for source in outcome["refreshedInputs"]])] = outcome["fact"]
                 return outcome["fact"]
@@ -326,7 +333,7 @@ def install():
         rows = agent._session_db.get_messages(agent.session_id, include_ancestors=True) if agent._session_db else []
         if not any(row.get("role") == "system" and row.get("content") == fact for row in rows):
             raise RuntimeError("Completed Task phase receipt is not durable")
-        return replace(verdict, action="break", final_response=fact,
+        return replace(verdict, action="break", final_response=turn.display_text,
                        _turn_exit_reason="text_response(public_task_phase)")
 
     prepare._agentteams_public_tasks = True
