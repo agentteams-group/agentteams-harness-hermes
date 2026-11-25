@@ -142,6 +142,11 @@ class TaskTurn:
                         _previous(*args, **kwargs)
                     _callback(*args, **kwargs)
                 setattr(agent, name, composed)
+            if self.meta.get("teamharness_coordination") or (self.context.get("context") or {}).get("task"):
+                self.previous_callbacks['interim_assistant_callback'] = (agent, getattr(agent, 'interim_assistant_callback', None))
+                def task_commentary(text, *, already_streamed=False):
+                    self.progress.reasoning(text + "\n")
+                agent.interim_assistant_callback = task_commentary
             previous = getattr(agent, 'tool_progress_callback', None)
             self.previous_callbacks['tool_progress_callback'] = (agent, previous)
             def native_progress(event_type, tool_name=None, preview=None, args=None, **kwargs):

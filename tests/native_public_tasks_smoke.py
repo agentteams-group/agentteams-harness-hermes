@@ -148,6 +148,18 @@ class NativePublicTaskSmoke(TestCase):
         from test_matrix_progress import test_native_failure_survives_gateway_error_handling
         test_native_failure_survives_gateway_error_handling()
 
+    def test_task_commentary_is_kept_with_native_progress(self):
+        agent = self.agent("http://127.0.0.1")
+        original = Mock()
+        agent.interim_assistant_callback = original
+        progress = Mock()
+        with task_turn(self.event, self.prepared, progress=progress) as turn:
+            turn.bind(agent, "own", [])
+            agent.interim_assistant_callback("Reading the submitted HTML.", already_streamed=False)
+            original.assert_not_called()
+            progress.reasoning.assert_called_once_with("Reading the submitted HTML.\n")
+        self.assertIs(agent.interim_assistant_callback, original)
+
     def test_native_task_tool_progress_uses_actual_ids_and_restores_callbacks(self):
         self.progress = Mock()
         self.test_actual_native_model_wire_and_tool_receipt_are_bound()
