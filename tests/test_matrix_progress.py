@@ -49,3 +49,21 @@ def test_parallel_same_name_calls_keep_exact_ids_results_and_one_run():
         assert all((row.get('m.new_content') or row)['org.agentteams.progress_only'] for row in sent)
         assert len({(row.get('m.new_content') or row)['org.agentteams.run']['run_id'] for row in sent}) == 1
     asyncio.run(check())
+
+
+def test_successful_task_phase_ends_with_its_result_and_keeps_its_run_on_recovery():
+    async def check():
+        sent = []
+        async def send(room, content):
+            sent.append(content)
+        identity = {"team_id": "squad", "task_id": "stage", "generation": 1}
+        run_ids = []
+        for source in ("$assignment", "recovery:squad/stage:1"):
+            event = SimpleNamespace(message_id=source, source=SimpleNamespace(chat_id="!task"),
+                                    _agentteams_recovery=identity)
+            display = MatrixProgress(send, event)
+            run_ids.append(display.run_id)
+            await display.finish(phase_complete=True)
+        assert run_ids[0] == run_ids[1]
+        assert sent == []
+    asyncio.run(check())

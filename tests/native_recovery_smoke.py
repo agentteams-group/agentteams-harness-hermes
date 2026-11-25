@@ -122,7 +122,7 @@ async def check(workspace):
         db = runner.session_store._db_for_key(key)
         db.append_message(first_session, "user", "Persisted native Task input")
         db.append_message(first_session, "assistant", "Native final answer")
-        recovery.prepare_reply.return_value = ({"execution": {"checkpoint": cp}}, "Saved authoritative answer")
+        recovery.prepare_reply.return_value = ({"execution": dict(task["execution"], checkpoint=cp)}, "Saved authoritative answer")
         def delivered(*args):
             cp.update(delivery="delivered", reply_event="$sent")
             return {"task": {"status": "in_progress"}, "execution": {"checkpoint": cp}}

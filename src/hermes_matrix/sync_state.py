@@ -88,7 +88,7 @@ class NativeSync:
         rooms = data.get("rooms", {}).get("join", {})
         futures = {(room, raw["event_id"]): asyncio.get_running_loop().create_future()
             for room, entry in rooms.items() for raw in entry.get("timeline", {}).get("events", [])
-            if raw.get("type") in {"m.room.message", "m.room.encrypted", "m.reaction"}}
+            if raw.get("type") in {"m.room.message", "m.room.encrypted", "m.reaction", "org.agentteams.coordination"}}
         held = []
         committed = False
         try:
@@ -115,7 +115,8 @@ class NativeSync:
                     if slot is None:
                         continue
                     event, source = slot.result()
-                    if event.type != EventType.ROOM_MESSAGE:
+                    control = str(event.type) == "org.agentteams.coordination"
+                    if event.type != EventType.ROOM_MESSAGE and not control:
                         deferred.append((event, source))
                         continue
                     key = matrix_event_key(room, str(event.event_id))
@@ -128,7 +129,8 @@ class NativeSync:
                     admission = Admission()
                     scope = _admission.set(admission)
                     try:
-                        tasks = self.dispatch_event(event, source)
+                        tasks = ([asyncio.create_task(self.adapter._on_room_message(event))] if control
+                                 else self.dispatch_event(event, source))
                         if not tasks:
                             raise RecoveryConflict("Native message handler unavailable")
                         dispatched = asyncio.gather(*tasks)

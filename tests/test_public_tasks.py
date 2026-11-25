@@ -61,7 +61,7 @@ def test_model_cannot_supply_source_or_operate_on_another_execution(modules):
     with public_tasks.task_turn(event(), {"execution": "own"}) as turn:
         with pytest.raises(ValueError, match="execution"):
             turn.invoke({"action": "submit", "taskId": "other", "summary": "wrong"})
-        with pytest.raises(ValueError, match="_nativeSource"):
+        with pytest.raises(ValueError, match="native source"):
             turn.invoke({"action": "get", "taskId": "own", "_nativeSource": {}})
 
 

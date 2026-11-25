@@ -14,11 +14,16 @@ def bounded(value):
     return json.loads(text) if len(text) <= 4096 else {'preview': text[:4096], 'truncated': True}
 
 
+def task_run_id(team, task, generation):
+    return f"hermes:{team}/{task}:{generation}"
+
+
 class MatrixProgress:
     def __init__(self, send, event):
         self.send, self.room = send, event.source.chat_id
         identity = getattr(event, '_agentteams_recovery', None) or {}
-        self.run_id = f"hermes:{event.message_id}:{identity.get('generation', 0)}"
+        self.run_id = (task_run_id(identity["team_id"], identity["task_id"], identity["generation"])
+                       if identity else f"hermes:{event.message_id}:0")
         self.loop = asyncio.get_running_loop()
         self.lock, self.reasoning_lock = asyncio.Lock(), threading.Lock()
         self.pending, self.calls, self.reasoning_text = [], {}, ''
@@ -69,7 +74,7 @@ class MatrixProgress:
             event_id = await self.send(self.room, content)
             self.calls.setdefault(key, {'event_id': event_id, 'started_at': block.get('started_at')})
 
-    async def finish(self, *, failed=False):
+    async def finish(self, *, failed=False, phase_complete=False):
         failed = failed or self.failed
         from runtime_observability import redact
         text = redact(self.take_reasoning())[:4096]
@@ -77,5 +82,7 @@ class MatrixProgress:
             self.submit(self.publish('reasoning:final', {'type': 'thinking', 'content': text}))
         for future in self.pending:
             await asyncio.wrap_future(future)
+        if phase_complete and not failed:
+            return
         await self.publish('ending', {'type': 'error', 'kind': 'failed' if failed else 'quiet',
                                      'title': '执行失败' if failed else '已处理'})

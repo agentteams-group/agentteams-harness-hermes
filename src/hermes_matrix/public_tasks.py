@@ -46,6 +46,31 @@ def common(name):
     return module
 
 
+def retain_confirmed_handoffs():
+    from hermes_state import SessionDB
+    from pathlib import Path
+    folder = Path(os.environ["AGENTTEAMS_WORKER_HOME"]) / ".agentteams/native-handoffs"
+    if not folder.is_dir():
+        return
+    items = common("task_native").invoke({"operation": "confirmed_handoffs", "runtime": "hermes"})["items"]
+    if not items:
+        return
+    db = SessionDB()
+    try:
+        for item in items:
+            session = item["target"]["session"]
+            if not db.get_session(session):
+                continue
+            existing = {row["content"] for row in db.get_messages(session) if row["role"] == "system"}
+            for fact in item["facts"]:
+                if fact not in existing:
+                    db.append_message(session, "system", content=fact)
+                    existing.add(fact)
+            (folder / (item["key"] + ".json")).unlink(missing_ok=True)
+    finally:
+        db.close()
+
+
 class TaskTurn:
     def __init__(self, event, prepared=None, progress=None):
         meta = {"room_id": event.source.chat_id, "sender_id": event.source.user_id,
@@ -63,6 +88,11 @@ class TaskTurn:
         self.context.update(role=os.getenv("AGENTTEAMS_AGENT_ROLE", "worker"),
                             sources=sources, sourceEvent=event.message_id,
                             actor=meta.get("agent_matrix_user_id", ""))
+        identity = getattr(event, "_agentteams_recovery", {}) or {}
+        if identity.get("session_id"):
+            self.context["handoffTarget"] = {"runtime": "hermes", "session": identity["session_id"]}
+        if progress:
+            self.context["runId"] = progress.run_id
         self.event = event
         self.meta = meta
         self.pending = []

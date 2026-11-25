@@ -117,6 +117,33 @@ class NativePublicTaskSmoke(TestCase):
         from test_matrix_progress import test_parallel_same_name_calls_keep_exact_ids_results_and_one_run
         test_parallel_same_name_calls_keep_exact_ids_results_and_one_run()
 
+    def test_confirmed_dispatch_is_written_only_to_its_native_session_once(self):
+        from hermes_state import SessionDB
+        from hermes_matrix.public_tasks import retain_confirmed_handoffs
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, AGENTTEAMS_WORKER_HOME=tmp):
+            dbpath = Path(tmp) / "state.db"
+            db = SessionDB(dbpath)
+            for identity in ("sender", "other"):
+                db.create_session(identity, "matrix")
+            db.close()
+            folder = Path(tmp) / ".agentteams/native-handoffs"
+            folder.mkdir(parents=True)
+            marker = folder / "dispatch.json"
+            item = {"target": {"session": "sender"}, "facts": ["confirmed actual Matrix handoff"], "key": "dispatch"}
+            with patch("hermes_state.SessionDB", side_effect=lambda: SessionDB(dbpath)), patch("hermes_matrix.public_tasks.common") as native:
+                native.return_value.invoke.return_value = {"items": [item]}
+                for _ in range(2):
+                    marker.touch()
+                    retain_confirmed_handoffs()
+                    self.assertFalse(marker.exists())
+            db = SessionDB(dbpath)
+            try:
+                self.assertEqual([r["content"] for r in db.get_messages("sender") if r["role"] == "system"], item["facts"])
+                self.assertEqual(db.get_messages("other"), [])
+            finally:
+                db.close()
+
     def test_native_progress_publisher_survives_caught_failure(self):
         from test_matrix_progress import test_native_failure_survives_gateway_error_handling
         test_native_failure_survives_gateway_error_handling()

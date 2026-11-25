@@ -62,7 +62,7 @@ def test_verified_assignment_is_durable_before_task_claim(monkeypatch, failure):
             raise OSError("storage failed")
     adapter._accept_matrix_input.side_effect = persist
     monkeypatch.setattr(task_recovery, "enabled", lambda: True)
-    monkeypatch.setattr(task_coordination, "notification", lambda *args: {
+    monkeypatch.setattr(task_coordination, "notification", lambda *args, event_id: {
         "meta": {"teamharness_coordination": {"kind": "task_assigned", "task_id": "T"}}})
     event = SimpleNamespace(room_id="!room:test", sender="@leader:test", event_id="$assignment",
         timestamp=42, content={"org.agentteams.coordination": {}})

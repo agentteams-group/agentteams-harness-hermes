@@ -124,6 +124,20 @@ class NativeSyncTests(unittest.IsolatedAsyncioTestCase):
         polled = await self.client.sync(since="stale-native-cache", timeout=30000)
         return await self.adapter._absorb_sync(self.client, polled)
 
+    async def test_private_control_uses_original_id_and_never_becomes_chat(self):
+        raw = event("$wake")
+        raw["type"] = "org.agentteams.coordination"
+        raw["content"]["org.agentteams.coordination"] = {}
+        forged = event("$unbound")
+        forged["type"] = raw["type"]
+        packet = {"meta": {"teamharness_coordination": {"kind": "handoff"}}, "text": "plan"}
+        with patch("task_coordination.notification", return_value=packet) as validate:
+            await self.absorb(response(raw, forged))
+        assert validate.call_args.kwargs == {"event_id": "$wake"}
+        assert self.admitted == ["$wake"]
+        assert len(self.matrix.last_inputs) == 1
+        assert self.matrix.last_inputs[0]["input"]["type"] == raw["type"]
+
     async def test_real_dispatch_retains_server_order_before_native_cursor(self):
         put = self.client.sync_store.put_next_batch
         async def native_put(token):
