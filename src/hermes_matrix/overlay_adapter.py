@@ -231,7 +231,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
     @staticmethod
     def _owns_recovery(task, identity, process, *, delivery=False):
         execution = task.get("execution", {}) if task else {}
-        return bool(task and task["status"] in {"in_progress", "assigned", "submitted"}
+        statuses = {"in_progress", "assigned", "submitted"} | ({"completed"} if delivery else set())
+        return bool(task and task["status"] in statuses
             and execution.get("runtime") == "hermes"
             and execution.get("state") in ({"active", "released"} if delivery else {"active"})
             and identity["process_id"] == process
@@ -241,7 +242,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
         from worker_sessions import WorkerSessions
         from task_recovery import RecoveryConflict, RecoveryUnavailable
         from hermes_matrix.session_cache import session_fingerprint
-        if saved.get("task", {}).get("status") == "submitted":
+        if saved.get("task", {}).get("status") in {"submitted", "completed"}:
             return
         runner = getattr(self._message_handler, "__self__", None)
         store = runner.session_store if runner else None

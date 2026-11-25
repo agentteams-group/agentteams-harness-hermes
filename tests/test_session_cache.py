@@ -59,6 +59,10 @@ def test_native_admission_and_final_delivery_preserve_execution_fences(monkeypat
     task["execution"]["state"] = "released"
     assert not module.MatrixAdapter._owns_recovery(task, identity, "process")
     assert module.MatrixAdapter._owns_recovery(task, identity, "process", delivery=True)
+    task["status"] = "completed"
+    assert not module.MatrixAdapter._owns_recovery(task, identity, "process")
+    assert module.MatrixAdapter._owns_recovery(task, identity, "process", delivery=True)
+    task["status"] = "in_progress"
     task["execution"]["state"] = "needs_verification"
     assert not module.MatrixAdapter._owns_recovery(task, identity, "process", delivery=True)
     task["execution"]["state"] = "active"
