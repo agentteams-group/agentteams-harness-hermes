@@ -62,6 +62,22 @@ def main():
                 assert content['m.mentions'] == {'user_ids': []}
             finally:
                 _coordination_turn.reset(scope)
+            from hermes_matrix.public_tasks import current_turn
+            from hermes_matrix.progress import current_progress
+            closing = _coordination_turn.set("main_task_ready")
+            turn = current_turn.set(SimpleNamespace(phase_complete=True, context={"sourceEvent":"$ready"}))
+            progress = current_progress.set(SimpleNamespace(run_id="close-run"))
+            try:
+                final = {"msgtype":"m.text", "body":"验收通过，已交付页面和测试报告。",
+                         "m.relates_to":{"rel_type":"m.thread", "event_id":"$ready",
+                                         "m.in_reply_to":{"event_id":"$ready"}}}
+                await adapter._client.send_message_event("!r:test","m.room.message",final)
+                assert final["org.agentteams.run"] == {"run_id":"close-run", "blocks":[{"type":"text","text":final["body"]}]}
+                assert final["m.relates_to"] == {"m.in_reply_to":{"event_id":"$ready"}}
+            finally:
+                current_progress.reset(progress)
+                current_turn.reset(turn)
+                _coordination_turn.reset(closing)
         try: asyncio.run(check())
         finally: api.shutdown()
     print('Hermes native admission, isolated sessions, stale closure and progress echo: passed')

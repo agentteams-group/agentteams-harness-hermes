@@ -731,6 +731,18 @@ class MatrixAdapter(_NativeMatrixAdapter):
                     if isinstance(content.get("m.new_content"), dict):
                         content["m.new_content"]["org.agentteams.progress_only"] = True
                         content["m.new_content"]["m.mentions"] = {"user_ids": []}
+                if (_coordination_turn.get() == "main_task_ready" and display and content.get("msgtype") == "m.text"
+                        and content.get("body") and "org.agentteams.approval" not in content):
+                    from hermes_matrix.public_tasks import current_turn
+                    turn = current_turn.get()
+                    if turn and turn.phase_complete:
+                        content["org.agentteams.run"] = {"run_id": display.run_id,
+                            "blocks": [{"type": "text", "text": content["body"]}]}
+                        # The gateway uses the wake as a private session key. Publish the
+                        # final report in the Task timeline as a reply to the actual handoff.
+                        relation = content.get("m.relates_to") or {}
+                        if relation.get("rel_type") == "m.thread" and relation.get("event_id") == turn.context["sourceEvent"]:
+                            content["m.relates_to"] = {"m.in_reply_to": {"event_id": relation["event_id"]}}
                 if self._session_receipts and str(event_type) == "m.room.message":
                     request = lambda *args: matrix_request(*credentials(self._session_receipts.workspace))(*args)
                     content = await asyncio.to_thread(capture_audience, request, str(room_id), content)
