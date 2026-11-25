@@ -229,6 +229,21 @@ def install():
     if getattr(original, "_agentteams_public_tasks", False):
         return
 
+    title_session = turn_context._maybe_title_session_at_turn_start
+    @wraps(title_session)
+    def task_title(agent, messages, title_user_message=None):
+        turn = current_turn.get()
+        scope = turn and (turn.context.get("execution") or turn.context.get("planning")
+                          or turn.context.get("review") or turn.context.get("completion"))
+        if not scope:
+            return title_session(agent, messages, title_user_message)
+        if agent._session_db:
+            agent._ensure_db_session()
+            if not agent._session_db.get_session_title(agent.session_id):
+                task = (turn.context.get("context") or {}).get("task") or {}
+                agent._session_db.set_session_title(agent.session_id,
+                    task.get("title") or "Task " + str(scope))
+
     @wraps(original)
     def prepare(agent, **kwargs):
         turn = current_turn.get()
@@ -338,6 +353,7 @@ def install():
 
     prepare._agentteams_public_tasks = True
     turn_context._collect_pre_llm_call_context = prepare
+    turn_context._maybe_title_session_at_turn_start = task_title
     AIAgent._build_api_kwargs = wire
     AIAgent._interruptible_api_call = traced_provider(AIAgent._interruptible_api_call)
     AIAgent._interruptible_streaming_api_call = traced_provider(AIAgent._interruptible_streaming_api_call)

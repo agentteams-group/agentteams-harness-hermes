@@ -9,3 +9,5 @@ Prepared model context uses `task_context.model_context` / the public `model_con
 Native tests and local model/API fixtures are separate from real Matrix multi-Worker end-to-end acceptance. Record source/image versions, tool-call and native-session receipts, model-call counts, exact artifact hashes, remote persistence, Trace visibility and any interventions. Do not describe synthetic fixture success as full Harness admission certification.
 
 Recovered and live inputs both bind the authenticated Matrix actor. A same-owner `completed` Task may settle an existing tool return and persist its actual native history, but never reopen inference or admit new tools. Silent final callbacks still require an authoritative durable result. Successful planning emits no control-receipt chat.
+
+Prepared Task turns use their registered Task title or identity as the native session title. They do not launch the SDK auxiliary title model, including its deferred post-turn upgrade. Ordinary conversations retain the SDK title behavior and existing session titles remain intact. The native SDK fixture checks both boundaries.

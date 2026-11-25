@@ -113,6 +113,19 @@ class NativePublicTaskSmoke(TestCase):
         self.assertTrue(any(row.get("role") == "tool" and "saved-submission" in str(row.get("content"))
                             for row in self.db.get_messages(agent.session_id)))
 
+    def test_task_turn_does_not_spawn_an_auxiliary_title_model(self):
+        with patch("agent.memory_provider.spawn_context_thread") as spawn:
+            self.test_actual_native_model_wire_and_tool_receipt_are_bound()
+        spawn.assert_not_called()
+
+    def test_ordinary_conversation_retains_native_title_generation(self):
+        from agent import turn_context
+        agent = self.agent()
+        with patch("agent.memory_provider.spawn_context_thread") as spawn:
+            turn_context._maybe_title_session_at_turn_start(agent,
+                [{"role": "user", "content": "Explain this ordinary conversation"}])
+        spawn.assert_called_once()
+
     def test_actual_model_and_task_trace_keep_verified_identity_without_content(self):
         from opentelemetry.sdk.trace.export import SimpleSpanProcessor
         from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
