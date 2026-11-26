@@ -54,8 +54,10 @@ async def task_reply(adapter, recovery, task_id, team, room, saved, text):
     async def bind(cp):
         fresh = await asyncio.to_thread(recovery.checkpoint, task_id, team, cp)
         check_binding(execution, cp, fresh)
+    from hermes_matrix.progress import task_run_id
+    run_id = task_run_id(team, task_id, execution["generation"])
     return await deliver(adapter._client, room, execution["checkpoint"], text,
-        {"msgtype": "m.text", "org.agentteams.progress_only": True}, bind)
+        {"msgtype": "m.text", "org.agentteams.progress_only": True, "org.agentteams.run_id": run_id}, bind)
 
 
 def check_binding(execution, cp, fresh):

@@ -168,7 +168,7 @@ class PendingInputs:
             return
         try:
             packet = await asyncio.to_thread(notification, source["content"], entry["room_id"],
-                source["sender"], str(self.adapter._user_id))
+                source["sender"], str(self.adapter._user_id), event_id=entry["event_id"])
         except IgnoredNotification:
             return
         if not packet or packet["meta"]["teamharness_coordination"]["kind"] == "task_assigned":
@@ -189,7 +189,7 @@ class PendingInputs:
         source = entry["input"]
         try:
             packet = await asyncio.to_thread(notification, source["content"], entry["room_id"],
-                source["sender"], str(self.adapter._user_id))
+                source["sender"], str(self.adapter._user_id), event_id=entry["event_id"])
         except IgnoredNotification:
             return
         canonical = packet["meta"]["teamharness_coordination"] if packet else {}

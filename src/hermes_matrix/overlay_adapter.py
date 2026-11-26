@@ -311,8 +311,12 @@ class MatrixAdapter(_NativeMatrixAdapter):
             return
         from worker_matrix_state import WorkerMatrix
         source = _matrix_source_event.get()
-        decoded = {"sender": sender, "type": "m.room.message",
-            "origin_server_ts": int(getattr(source, "timestamp", 0) or 0), "content": content}
+        timestamp = getattr(source, "timestamp", None)
+        if timestamp is None and str(getattr(source, "type", "")) == "org.agentteams.coordination":
+            # Mautrix preserves custom event timestamps in its wire representation.
+            timestamp = source.serialize().get("origin_server_ts")
+        decoded = {"sender": sender, "type": str(getattr(source, "type", "m.room.message")),
+            "origin_server_ts": int(timestamp or 0), "content": content}
         shared = getattr(self, "_shared_sync", None)
         if shared is not None:
             from hermes_matrix.sync_state import current_admission
@@ -343,11 +347,13 @@ class MatrixAdapter(_NativeMatrixAdapter):
     async def _on_matrix_input(self, event):
         content = getattr(event, "content", None)
         content = content if isinstance(content, dict) else content.serialize() if hasattr(content, "serialize") else {}
+        if str(getattr(event, "type", "")) == "org.agentteams.coordination" and "org.agentteams.coordination" not in content:
+            return
         if "org.agentteams.coordination" not in content and content.get("org.agentteams.progress_only") is not True:
             return await super()._on_room_message(event)
         try:
             from task_coordination import notification
-            packet = await asyncio.to_thread(notification, content, str(event.room_id), str(event.sender), str(self._user_id))
+            packet = await asyncio.to_thread(notification, content, str(event.room_id), str(event.sender), str(self._user_id), event_id=str(event.event_id))
         except (ImportError, ValueError):
             return
         if not await self._is_allowed_matrix_room_event(str(event.room_id)) or self._is_duplicate_event(str(event.event_id)):
@@ -378,7 +384,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
         from gateway.platforms.event import MessageEvent
         content = event.content if isinstance(event.content, dict) else event.content.serialize()
         own_control = (str(event.sender) == str(self._user_id)
-                       and packet["meta"]["teamharness_coordination"]["kind"] in {"main_task_ready", "assistant_digest"})
+                       and packet["meta"]["teamharness_coordination"]["kind"] in {"handoff", "main_task_ready", "assistant_digest"})
         message = MessageEvent(text=packet["text"], source=source,
             message_id=str(event.event_id), raw_message=content,
             internal=own_control, allow_gateway_control=False)
@@ -457,7 +463,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
                 display_token = current_progress.set(display)
                 failed = False
                 try:
-                    with task_turn(event, prepared, progress=display):
+                    with task_turn(event, prepared, progress=display) as turn:
                         if public_event:
                             trace_event("coordination.native_begin", event_id=event.message_id,
                                         coordination_id=public_event.get("id", ""), phase=public_event["kind"])
@@ -468,7 +474,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
                 finally:
                     try:
                         if display:
-                            await display.finish(failed=failed)
+                            await display.finish(failed=failed, phase_complete=turn.phase_complete)
                     except Exception:
                         logger.exception('Matrix native progress delivery failed')
                     finally:
@@ -647,6 +653,12 @@ class MatrixAdapter(_NativeMatrixAdapter):
             from hermes_matrix.sync_history import recover_history
             for room_id, failure in (await recover_history(shared)).items():
                 logger.warning("Matrix history pending in %s: %s", room_id, failure)
+        if pending is not None:
+            from hermes_matrix.public_tasks import retain_confirmed_handoffs
+            try:
+                await asyncio.to_thread(retain_confirmed_handoffs)
+            except Exception:
+                logger.exception("Confirmed Task handoffs remain pending")
         if pending is not None and (shared.history_pending or not startup):
             await pending.drain()
         return cursor
@@ -719,6 +731,18 @@ class MatrixAdapter(_NativeMatrixAdapter):
                     if isinstance(content.get("m.new_content"), dict):
                         content["m.new_content"]["org.agentteams.progress_only"] = True
                         content["m.new_content"]["m.mentions"] = {"user_ids": []}
+                if (_coordination_turn.get() == "main_task_ready" and display and content.get("msgtype") == "m.text"
+                        and content.get("body") and "org.agentteams.approval" not in content):
+                    from hermes_matrix.public_tasks import current_turn
+                    turn = current_turn.get()
+                    if turn and turn.phase_complete:
+                        content["org.agentteams.run"] = {"run_id": display.run_id,
+                            "blocks": [{"type": "text", "text": content["body"]}]}
+                        # The gateway uses the wake as a private session key. Publish the
+                        # final report in the Task timeline as a reply to the actual handoff.
+                        relation = content.get("m.relates_to") or {}
+                        if relation.get("rel_type") == "m.thread" and relation.get("event_id") == turn.context["sourceEvent"]:
+                            content["m.relates_to"] = {"m.in_reply_to": {"event_id": relation["event_id"]}}
                 if self._session_receipts and str(event_type) == "m.room.message":
                     request = lambda *args: matrix_request(*credentials(self._session_receipts.workspace))(*args)
                     content = await asyncio.to_thread(capture_audience, request, str(room_id), content)

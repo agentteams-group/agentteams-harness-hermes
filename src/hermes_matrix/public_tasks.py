@@ -46,7 +46,37 @@ def common(name):
     return module
 
 
+def retain_confirmed_handoffs():
+    from hermes_state import SessionDB
+    from pathlib import Path
+    folder = Path(os.environ["AGENTTEAMS_WORKER_HOME"]) / ".agentteams/native-handoffs"
+    if not folder.is_dir():
+        return
+    items = common("task_native").invoke({"operation": "confirmed_handoffs", "runtime": "hermes"})["items"]
+    if not items:
+        return
+    db = SessionDB()
+    try:
+        for item in items:
+            session = item["target"]["session"]
+            if not db.get_session(session):
+                continue
+            existing = {row["content"] for row in db.get_messages(session) if row["role"] == "system"}
+            for fact in item["facts"]:
+                if fact not in existing:
+                    db.append_message(session, "system", content=fact)
+                    existing.add(fact)
+            (folder / (item["key"] + ".json")).unlink(missing_ok=True)
+    finally:
+        db.close()
+
+
 class TaskTurn:
+    @property
+    def has_task_progress(self):
+        return self.progress is not None and bool(self.meta.get("teamharness_coordination") or
+                                                  (self.context.get("context") or {}).get("task"))
+
     def __init__(self, event, prepared=None, progress=None):
         meta = {"room_id": event.source.chat_id, "sender_id": event.source.user_id,
                 "event_id": event.message_id}
@@ -63,6 +93,11 @@ class TaskTurn:
         self.context.update(role=os.getenv("AGENTTEAMS_AGENT_ROLE", "worker"),
                             sources=sources, sourceEvent=event.message_id,
                             actor=meta.get("agent_matrix_user_id", ""))
+        identity = getattr(event, "_agentteams_recovery", {}) or {}
+        if identity.get("session_id"):
+            self.context["handoffTarget"] = {"runtime": "hermes", "session": identity["session_id"]}
+        if progress:
+            self.context["runId"] = progress.run_id
         self.event = event
         self.meta = meta
         self.pending = []
@@ -112,6 +147,11 @@ class TaskTurn:
                         _previous(*args, **kwargs)
                     _callback(*args, **kwargs)
                 setattr(agent, name, composed)
+            if self.has_task_progress:
+                self.previous_callbacks['interim_assistant_callback'] = (agent, getattr(agent, 'interim_assistant_callback', None))
+                def task_commentary(text, *, already_streamed=False):
+                    self.progress.reasoning(text + "\n")
+                agent.interim_assistant_callback = task_commentary
             previous = getattr(agent, 'tool_progress_callback', None)
             self.previous_callbacks['tool_progress_callback'] = (agent, previous)
             def native_progress(event_type, tool_name=None, preview=None, args=None, **kwargs):
@@ -256,6 +296,15 @@ def install():
     if getattr(original, "_agentteams_public_tasks", False):
         return
 
+    from gateway.run_turn import GatewayTurnMixin
+    native_heartbeat = GatewayTurnMixin._run_agent_notify_long_running
+    @wraps(native_heartbeat)
+    async def task_heartbeat(runner, *args, **kwargs):
+        turn = current_turn.get()
+        if turn and turn.has_task_progress:
+            return
+        return await native_heartbeat(runner, *args, **kwargs)
+
     native_conversation = TurnFacadeMixin.run_conversation
     @wraps(native_conversation)
     def task_conversation(agent, *args, **kwargs):
@@ -387,6 +436,7 @@ def install():
     prepare._agentteams_public_tasks = True
     turn_context._collect_pre_llm_call_context = prepare
     turn_context._maybe_title_session_at_turn_start = task_title
+    GatewayTurnMixin._run_agent_notify_long_running = task_heartbeat
     TurnFacadeMixin.run_conversation = task_conversation
     AIAgent._build_api_kwargs = wire
     AIAgent._interruptible_api_call = traced_provider(AIAgent._interruptible_api_call)

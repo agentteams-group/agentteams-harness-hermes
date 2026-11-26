@@ -47,7 +47,7 @@ async def recover_history(sync):
                 native = await sync.client.crypto.decrypt_megolm_event(native)
                 if str(native.room_id) != room or str(native.event_id) != event_id:
                     raise RecoveryConflict("Decrypted history input changed identity")
-            if native.type != EventType.ROOM_MESSAGE:
+            if native.type != EventType.ROOM_MESSAGE and str(native.type) != "org.agentteams.coordination":
                 continue
             if isinstance(native.content, BaseMessageEventContentFuncs):
                 native.content.trim_reply_fallback()  # Same normalization as mautrix Syncer.dispatch_event.

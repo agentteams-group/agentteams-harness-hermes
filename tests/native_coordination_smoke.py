@@ -35,23 +35,23 @@ def main():
             adapter._is_allowed_matrix_room_event = AsyncMock(return_value=True)
             adapter._is_duplicate_event = lambda _: False
             adapter.handle_message = AsyncMock()
-            for kind in ['task_assigned', 'task_submitted', 'main_task_ready']:
+            for kind in ['task_assigned', 'task_submitted', 'handoff', 'main_task_ready']:
                 event = dict(id='a'*32, kind=kind, task_id='t', main_task_id='m', project_id='', delivery_id='d', submission_id='s')
                 control = {'session_id': f'coordination:{kind}', 'channel_meta': {'sender_id':'@lead:test','agent_matrix_user_id':'@lead:test','room_id':'!r:test','teamharness_coordination':event}, 'input':[{'content':[{'text': 'Canonical '+kind}]}]}
-                current['receipt'] = dict(status='running', actor='@lead:test', recipient='@lead:test', room_id='!r:test', control=control)
+                current['receipt'] = dict(status='running', native_id='matrix:$'+kind, actor='@lead:test', recipient='@lead:test', room_id='!r:test', control=control)
                 current['task'] = dict(task_id='t', main_task_id='m', project_id='', status='assigned' if kind=='task_assigned' else 'submitted', assigned_to='@lead:test', notifyTxn='d', submission_id='s') if kind != 'main_task_ready' else dict(task_kind='main', status='in_progress',tasks=[dict(task_id='t',status='completed')])
                 raw = MatrixEvent.deserialize({'type':'m.room.message', 'room_id':'!r:test', 'sender':'@lead:test', 'event_id':'$'+kind, 'origin_server_ts':0, 'content':{'msgtype':'m.text', 'org.agentteams.coordination':control, 'body':'Visible projection'}})
                 await adapter._on_room_message(raw)
-                assert adapter.handle_message.call_count == ['task_assigned','task_submitted','main_task_ready'].index(kind)+1
+                assert adapter.handle_message.call_count == ['task_assigned','task_submitted','handoff','main_task_ready'].index(kind)+1
                 message = adapter.handle_message.call_args.args[0]
                 assert message.text == 'Canonical '+kind
                 assert message.source.thread_id == '$'+kind
                 assert kind in adapter._event_session_key(message)
-                assert message.internal is (kind == 'main_task_ready')
+                assert message.internal is (kind in {'main_task_ready', 'handoff'})
                 assert message.allow_gateway_control is False
             current['task']['tasks'][0]['status'] = 'submitted'
             await adapter._on_room_message(raw)
-            assert adapter.handle_message.call_count == 3
+            assert adapter.handle_message.call_count == 4
             adapter._client = SimpleNamespace(send_message_event=AsyncMock(return_value='$sent'))
             adapter._wrap_send_message_event()
             scope = _coordination_turn.set(True)
@@ -62,6 +62,22 @@ def main():
                 assert content['m.mentions'] == {'user_ids': []}
             finally:
                 _coordination_turn.reset(scope)
+            from hermes_matrix.public_tasks import current_turn
+            from hermes_matrix.progress import current_progress
+            closing = _coordination_turn.set("main_task_ready")
+            turn = current_turn.set(SimpleNamespace(phase_complete=True, context={"sourceEvent":"$ready"}))
+            progress = current_progress.set(SimpleNamespace(run_id="close-run"))
+            try:
+                final = {"msgtype":"m.text", "body":"验收通过，已交付页面和测试报告。",
+                         "m.relates_to":{"rel_type":"m.thread", "event_id":"$ready",
+                                         "m.in_reply_to":{"event_id":"$ready"}}}
+                await adapter._client.send_message_event("!r:test","m.room.message",final)
+                assert final["org.agentteams.run"] == {"run_id":"close-run", "blocks":[{"type":"text","text":final["body"]}]}
+                assert final["m.relates_to"] == {"m.in_reply_to":{"event_id":"$ready"}}
+            finally:
+                current_progress.reset(progress)
+                current_turn.reset(turn)
+                _coordination_turn.reset(closing)
         try: asyncio.run(check())
         finally: api.shutdown()
     print('Hermes native admission, isolated sessions, stale closure and progress echo: passed')

@@ -117,9 +117,60 @@ class NativePublicTaskSmoke(TestCase):
         from test_matrix_progress import test_parallel_same_name_calls_keep_exact_ids_results_and_one_run
         test_parallel_same_name_calls_keep_exact_ids_results_and_one_run()
 
+    def test_confirmed_dispatch_is_written_only_to_its_native_session_once(self):
+        from hermes_state import SessionDB
+        from hermes_matrix.public_tasks import retain_confirmed_handoffs
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, AGENTTEAMS_WORKER_HOME=tmp):
+            dbpath = Path(tmp) / "state.db"
+            db = SessionDB(dbpath)
+            for identity in ("sender", "other"):
+                db.create_session(identity, "matrix")
+            db.close()
+            folder = Path(tmp) / ".agentteams/native-handoffs"
+            folder.mkdir(parents=True)
+            marker = folder / "dispatch.json"
+            item = {"target": {"session": "sender"}, "facts": ["confirmed actual Matrix handoff"], "key": "dispatch"}
+            with patch("hermes_state.SessionDB", side_effect=lambda: SessionDB(dbpath)), patch("hermes_matrix.public_tasks.common") as native:
+                native.return_value.invoke.return_value = {"items": [item]}
+                for _ in range(2):
+                    marker.touch()
+                    retain_confirmed_handoffs()
+                    self.assertFalse(marker.exists())
+            db = SessionDB(dbpath)
+            try:
+                self.assertEqual([r["content"] for r in db.get_messages("sender") if r["role"] == "system"], item["facts"])
+                self.assertEqual(db.get_messages("other"), [])
+            finally:
+                db.close()
+
     def test_native_progress_publisher_survives_caught_failure(self):
         from test_matrix_progress import test_native_failure_survives_gateway_error_handling
         test_native_failure_survives_gateway_error_handling()
+
+    def test_prepared_task_does_not_start_a_separate_gateway_heartbeat(self):
+        import asyncio
+        from gateway.run_turn import GatewayTurnMixin
+        display = Mock()
+        display._display_surface_mode.return_value = "off"
+        with task_turn(self.event, self.prepared, progress=Mock(run_id="task-run")):
+            asyncio.run(GatewayTurnMixin._run_agent_notify_long_running(None, display, None, []))
+        display._display_surface_mode.assert_not_called()
+        with task_turn(self.event, {}, progress=Mock(run_id="ordinary-run")):
+            asyncio.run(GatewayTurnMixin._run_agent_notify_long_running(None, display, None, []))
+        display._display_surface_mode.assert_called_once()
+
+    def test_task_commentary_is_kept_with_native_progress(self):
+        agent = self.agent("http://127.0.0.1")
+        original = Mock()
+        agent.interim_assistant_callback = original
+        progress = Mock()
+        with task_turn(self.event, self.prepared, progress=progress) as turn:
+            turn.bind(agent, "own", [])
+            agent.interim_assistant_callback("Reading the submitted HTML.", already_streamed=False)
+            original.assert_not_called()
+            progress.reasoning.assert_called_once_with("Reading the submitted HTML.\n")
+        self.assertIs(agent.interim_assistant_callback, original)
 
     def test_native_task_tool_progress_uses_actual_ids_and_restores_callbacks(self):
         self.progress = Mock()

@@ -99,7 +99,7 @@ class OrdinaryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(recovered.args, ("T",))
             self.assertEqual(recovered.kwargs["only_team"], "team")
             self.assertEqual(recovered.kwargs["source_event"].event_id, "$source")
-            verified.assert_called_once_with(self.entry["input"]["content"], "!room:test", "@person:test", "@worker:test")
+            verified.assert_called_once_with(self.entry["input"]["content"], "!room:test", "@person:test", "@worker:test", event_id="$source")
             self.entry["native_commit"] = {"runtime":"hermes"}
             await self.ordinary.drain()
             self.adapter._recover_tasks.assert_awaited_once()
