@@ -148,6 +148,18 @@ class NativePublicTaskSmoke(TestCase):
         from test_matrix_progress import test_native_failure_survives_gateway_error_handling
         test_native_failure_survives_gateway_error_handling()
 
+    def test_prepared_task_does_not_start_a_separate_gateway_heartbeat(self):
+        import asyncio
+        from gateway.run_turn import GatewayTurnMixin
+        display = Mock()
+        display._display_surface_mode.return_value = "off"
+        with task_turn(self.event, self.prepared, progress=Mock(run_id="task-run")):
+            asyncio.run(GatewayTurnMixin._run_agent_notify_long_running(None, display, None, []))
+        display._display_surface_mode.assert_not_called()
+        with task_turn(self.event, {}, progress=Mock(run_id="ordinary-run")):
+            asyncio.run(GatewayTurnMixin._run_agent_notify_long_running(None, display, None, []))
+        display._display_surface_mode.assert_called_once()
+
     def test_task_commentary_is_kept_with_native_progress(self):
         agent = self.agent("http://127.0.0.1")
         original = Mock()

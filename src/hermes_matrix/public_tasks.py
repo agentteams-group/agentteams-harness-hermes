@@ -72,6 +72,11 @@ def retain_confirmed_handoffs():
 
 
 class TaskTurn:
+    @property
+    def has_task_progress(self):
+        return self.progress is not None and bool(self.meta.get("teamharness_coordination") or
+                                                  (self.context.get("context") or {}).get("task"))
+
     def __init__(self, event, prepared=None, progress=None):
         meta = {"room_id": event.source.chat_id, "sender_id": event.source.user_id,
                 "event_id": event.message_id}
@@ -142,7 +147,7 @@ class TaskTurn:
                         _previous(*args, **kwargs)
                     _callback(*args, **kwargs)
                 setattr(agent, name, composed)
-            if self.meta.get("teamharness_coordination") or (self.context.get("context") or {}).get("task"):
+            if self.has_task_progress:
                 self.previous_callbacks['interim_assistant_callback'] = (agent, getattr(agent, 'interim_assistant_callback', None))
                 def task_commentary(text, *, already_streamed=False):
                     self.progress.reasoning(text + "\n")
@@ -291,6 +296,15 @@ def install():
     if getattr(original, "_agentteams_public_tasks", False):
         return
 
+    from gateway.run_turn import GatewayTurnMixin
+    native_heartbeat = GatewayTurnMixin._run_agent_notify_long_running
+    @wraps(native_heartbeat)
+    async def task_heartbeat(runner, *args, **kwargs):
+        turn = current_turn.get()
+        if turn and turn.has_task_progress:
+            return
+        return await native_heartbeat(runner, *args, **kwargs)
+
     native_conversation = TurnFacadeMixin.run_conversation
     @wraps(native_conversation)
     def task_conversation(agent, *args, **kwargs):
@@ -422,6 +436,7 @@ def install():
     prepare._agentteams_public_tasks = True
     turn_context._collect_pre_llm_call_context = prepare
     turn_context._maybe_title_session_at_turn_start = task_title
+    GatewayTurnMixin._run_agent_notify_long_running = task_heartbeat
     TurnFacadeMixin.run_conversation = task_conversation
     AIAgent._build_api_kwargs = wire
     AIAgent._interruptible_api_call = traced_provider(AIAgent._interruptible_api_call)
