@@ -9,6 +9,7 @@ import json
 import logging
 import time
 
+from task_coordination import requires_room_history
 from task_recovery import RecoveryConflict
 from worker_sessions import WorkerSessions
 from worker_matrix_state import matrix_event_key
@@ -34,13 +35,11 @@ def execute_tools(matrix, identity, native, agent, assistant, messages, effectiv
         selected.tool_calls = business
         offset = len(messages)
         native(agent, selected, messages, effective_task_id, api_call_count)
-        results = []
-        for msg in messages[offset:]:
-            if msg.get("role") != "tool":
-                continue
-            if msg.get("effect_disposition") == "unknown":
-                raise RecoveryConflict("Native Hermes tool effect requires verification")
-            results.append({"id": msg["tool_call_id"], "content": msg["content"]})
+        from hermes_matrix.mcp_outcomes import unconfirmed
+        if unconfirmed(agent, messages[offset:]):
+            raise RecoveryConflict("Native Hermes tool effect requires verification")
+        from hermes_matrix.mcp_outcomes import receipts
+        results = receipts(agent, messages[offset:])
         saved = matrix.message_finish_tools(identity, operation, results)
     if canonical:
         selected = copy(assistant)
@@ -116,7 +115,8 @@ class PendingInputs:
                     continue
                 if entry["intent"] == "control":
                     if (key not in self.running and not entry.get("native_commit")
-                            and not snapshot["state"].get("rooms", {}).get(room, {}).get("gaps")):
+                            and (not snapshot["state"].get("rooms", {}).get(room, {}).get("gaps")
+                                 or not await asyncio.to_thread(requires_room_history, entry, str(self.adapter._user_id)))):
                         try:
                             if joined is None:
                                 joined = set(await self.adapter._client.get_joined_rooms())
@@ -134,7 +134,9 @@ class PendingInputs:
                     if room not in joined:
                         continue
                     if entry["intent"] == "task_notification":
-                        if (not entry.get("native_commit") and not snapshot["state"].get("rooms", {}).get(room, {}).get("gaps")
+                        if (not entry.get("native_commit")
+                                and (not snapshot["state"].get("rooms", {}).get(room, {}).get("gaps")
+                                     or not await asyncio.to_thread(requires_room_history, entry, str(self.adapter._user_id)))
                                 and await self.adapter._is_allowed_matrix_room_event(room)):
                             await self.resume_assignment(entry)
                         continue
@@ -234,10 +236,13 @@ class PendingInputs:
             limit = self.adapter._history.limit
             allowed = [item["input"] for item in (history[-limit:] if limit else [])
                        if await self.permitted(room, item["input"]["sender"], thread=thread)]
-            if allowed:
+            if allowed and await asyncio.to_thread(requires_room_history, entry, str(self.adapter._user_id)):
                 native_event.text += "\nEarlier room messages (context only):\n" + json.dumps(allowed, ensure_ascii=False)
         elif claimed["execution"].get("checkpoint"):
             native_event.text = claimed["resume_text"] + "\n" + native_event.text
+        from hermes_matrix.task_inputs import steer
+        if await steer(self.adapter, entry) is not None:
+            return
         session_key = runner._session_key_for_source(native_event.source)
         if runner._is_session_running(session_key) or session_key in self.adapter._active_sessions:
             return

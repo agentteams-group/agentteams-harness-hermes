@@ -91,6 +91,17 @@ def test_review_exposes_only_common_task_operations(modules):
         assert agent.valid_tool_names == {public_tasks.TASK_TOOL}
 
 
+def test_task_turn_skips_implicit_native_review_and_restores_the_setting(modules):
+    agent = SimpleNamespace(tools=[], valid_tool_names=set(), skip_background_review=False)
+    with public_tasks.task_turn(event(), {"review": ["execution", "submission"]}) as turn:
+        turn.bind(agent, "review-session", [])
+        assert agent.skip_background_review is True
+    assert agent.skip_background_review is False
+    with public_tasks.task_turn(event()) as turn:
+        turn.bind(agent, "ordinary-session", [])
+        assert agent.skip_background_review is False
+
+
 def test_prepared_model_context_keeps_references_without_file_previews(modules):
     prepared = {'fact': 'Own assignment', 'context': {'inputs': [{'files': [
         {'path': '/verified/result.json', 'preview': 'Entire upstream file body'}]}]}}
@@ -137,3 +148,9 @@ def test_refreshed_input_must_be_saved_and_read_back_before_creation_resumes(mod
         with pytest.raises(RuntimeError, match="not retained"):
             turn.checkpoint_refreshed(agent, messages)
         assert turn.context["inputRefreshPending"] is True
+
+
+def test_ordinary_followup_keeps_transport_room_for_task_continuation(modules):
+    with public_tasks.task_turn(event()) as turn:
+        assert turn.context["sourceRoom"] == "!room:test"
+        assert "execution" not in turn.context

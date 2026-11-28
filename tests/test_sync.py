@@ -93,6 +93,20 @@ def test_older_controller_keeps_compatibility_without_logging_credentials(tmp_pa
     assert "legacy-secret-test-token" not in caplog.text
 
 
+def test_manager_standard_channel_policy_applies_to_compatibility_transport(tmp_path, monkeypatch):
+    sync = FileSync(endpoint="http://minio:9000", access_key="test", secret_key="test",
+                    bucket="test", worker_name="manager", local_dir=tmp_path)
+    runtime = {"member": {"runtime": "hermes", "role": "manager", "matrixUserId": "@manager:matrix.test"},
+               "desired": {"channelPolicy": {"dmAllowExtra": ["admin"], "dmDenyExtra": ["old"],
+                                               "groupAllowExtra": ["@leader:matrix.test"]}}}
+    legacy = {"channels": {"matrix": {"dm": {"policy": "allowlist", "allowFrom": ["@old:matrix.test"]},
+                                      "groupAllowFrom": ["@owner:matrix.test"]}}}
+    monkeypatch.setattr(sync, "_cat", lambda key: yaml.safe_dump(runtime) if key.endswith("runtime.yaml") else json.dumps(legacy))
+    matrix = sync.get_config()["channels"]["matrix"]
+    assert matrix["dm"]["allowFrom"] == ["@admin:matrix.test"]
+    assert matrix["groupAllowFrom"] == ["@owner:matrix.test", "@leader:matrix.test"]
+
+
 def test_standard_transport_retains_legacy_model_when_no_managed_model_is_declared(tmp_path, monkeypatch):
     sync = FileSync(endpoint="http://minio:9000", access_key="test", secret_key="test",
                     bucket="test", worker_name="worker", local_dir=tmp_path)

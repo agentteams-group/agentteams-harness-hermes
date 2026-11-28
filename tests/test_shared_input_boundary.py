@@ -100,3 +100,30 @@ def test_overlapping_native_callbacks_keep_their_source_timestamp(monkeypatch):
     asyncio.run(run())
     assert [(args[1], args[2]["origin_server_ts"], args[2]["content"]["body"]) for args in accepted] == [
         ("$1", 1, "1"), ("$2", 2, "2")]
+
+
+def test_failed_task_cleanup_clears_running_state_and_allows_next_trigger(monkeypatch):
+    import hermes_matrix.task_inputs as task_inputs
+    from worker_matrix_state import matrix_event_key
+    module, native, adapter = fixture(monkeypatch)
+    room, event_id = '!task:test', '$first'
+    key = matrix_event_key(room, event_id)
+    adapter._task_runs = {}
+    adapter._pending_matrix = SimpleNamespace(running={key})
+    backend = AsyncMock(return_value='native result')
+    monkeypatch.setattr(native, '_process_message_background', backend, raising=False)
+    monkeypatch.setattr(task_inputs, 'close', Mock(side_effect=[OSError('native cleanup failed'), None]))
+    event = SimpleNamespace(raw_message={}, source=SimpleNamespace(chat_id=room), message_id=event_id,
+                            _agentteams_recovery={'task_id': 'node'})
+    async def run():
+        before = module._coordination_turn.get()
+        with pytest.raises(OSError, match='cleanup failed'):
+            await adapter._process_managed_message(event, 'native-session')
+        assert adapter._task_runs == {}
+        assert not adapter._pending_matrix.running
+        assert module._coordination_turn.get() == before
+        assert await adapter._process_managed_message(event, 'native-session') == 'native result'
+        assert adapter._task_runs == {}
+        assert module._coordination_turn.get() == before
+    asyncio.run(run())
+    assert backend.await_count == 2

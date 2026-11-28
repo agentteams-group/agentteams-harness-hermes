@@ -91,7 +91,7 @@ class TaskTurn:
             sources = common("task_receipt").creation_sources(meta)
         self.context = dict(prepared or {})
         self.context.update(role=os.getenv("AGENTTEAMS_AGENT_ROLE", "worker"),
-                            sources=sources, sourceEvent=event.message_id,
+                            sources=sources, sourceEvent=event.message_id, sourceRoom=event.source.chat_id,
                             actor=meta.get("agent_matrix_user_id", ""))
         identity = getattr(event, "_agentteams_recovery", {}) or {}
         if identity.get("session_id"):
@@ -99,6 +99,8 @@ class TaskTurn:
         if progress:
             self.context["runId"] = progress.run_id
         self.event = event
+        self.supplements = {}
+        event._agentteams_task_turn = self
         self.meta = meta
         self.pending = []
         self.previous_io = {}
@@ -124,8 +126,11 @@ class TaskTurn:
         claim = getattr(self.event, "_agentteams_recovery", None) or {}
         receipt = self.context.get("context") or {}
         task = receipt.get("task") or {}
+        planning = self.context.get("planning") or []
+        main = self.context.get("completion") or (planning[0] if len(planning) == 1 else None)
         metadata = {**self.meta, "event_id": self.event.message_id if str(self.event.message_id).startswith("$") else "",
-            "task_id": claim.get("task_id") or coordination.get("task_id") or task.get("id"),
+            "task_id": claim.get("task_id") or coordination.get("task_id") or task.get("id") or main,
+            "main_task_id": coordination.get("main_task_id") or task.get("mainTaskId") or (task.get("id") if task.get("kind") == "main" else main),
             "team_id": claim.get("team_id"), "project_id": coordination.get("project_id") or task.get("projectId")}
         generation = claim.get("generation") if claim else receipt.get("generation")
         if isinstance(generation, int) and generation > 0:
@@ -136,6 +141,10 @@ class TaskTurn:
         if self.bound:
             return
         self.bound = True
+        if any(self.context.get(key) for key in ('execution', 'planning', 'review', 'completion')):
+            # A post-turn review fork cannot reuse a Task lease after submission.
+            self.previous_callbacks['skip_background_review'] = (agent, getattr(agent, 'skip_background_review', False))
+            agent.skip_background_review = True
         if self.progress:
             for name, callback in [('tool_start_callback', self.progress.tool_started),
                                    ('tool_complete_callback', self.progress.tool_completed),
@@ -296,6 +305,8 @@ def install():
     if getattr(original, "_agentteams_public_tasks", False):
         return
 
+    from hermes_matrix.mcp_policy import install as install_mcp_policy
+    install_mcp_policy()
     from gateway.run_turn import GatewayTurnMixin
     native_heartbeat = GatewayTurnMixin._run_agent_notify_long_running
     @wraps(native_heartbeat)
@@ -401,11 +412,12 @@ def install():
                 offset = len(messages)
                 result = batch(agent, selected, messages, *args, **kwargs)
                 rows = [row for row in messages[offset:] if row.get("role") == "tool"]
+                from hermes_matrix.mcp_outcomes import unconfirmed, receipts
                 if (getattr(agent, "_incremental_persistence_failed", False)
-                        or any(row.get("effect_disposition") == "unknown" for row in rows)):
+                        or unconfirmed(agent, rows)):
                     raise RuntimeError("Native Task tool results require verification")
                 turn.task_journal("finish_tools", operation_id=operation,
-                    results=[{"id": row["tool_call_id"], "content": row["content"]} for row in rows])
+                    results=receipts(agent, rows))
             if canonical:
                 selected = copy(assistant_message)
                 selected.tool_calls = canonical

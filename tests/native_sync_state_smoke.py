@@ -86,6 +86,9 @@ class NativeSyncTests(unittest.IsolatedAsyncioTestCase):
             AGENTTEAMS_AGENT_ROLE="worker")
         env.start()
         self.addCleanup(env.stop)
+        room_authority = patch("task_coordination.controller_json", return_value={})
+        self.room_authority = room_authority.start()
+        self.addCleanup(room_authority.stop)
         self.matrix = MatrixFixture()
         for module in ["worker_matrix_state.WorkerMatrix", "hermes_matrix.sync_state.WorkerMatrix"]:
             mocked = patch(module, return_value=self.matrix)
@@ -123,6 +126,41 @@ class NativeSyncTests(unittest.IsolatedAsyncioTestCase):
         self.native_http.return_value = data
         polled = await self.client.sync(since="stale-native-cache", timeout=30000)
         return await self.adapter._absorb_sync(self.client, polled)
+
+    async def test_verified_task_control_runs_while_ordinary_chat_waits_for_history(self):
+        raw = event("$task-wake")
+        raw["type"] = "org.agentteams.coordination"
+        raw["content"]["org.agentteams.coordination"] = {}
+        ordinary = event("$ordinary")
+        packet = {"meta": {"teamharness_coordination": {"kind": "handoff"}}, "text": "task context"}
+        def authority(content, *args, **kwargs):
+            return packet if "org.agentteams.coordination" in content else None
+        with patch("task_coordination.notification", side_effect=authority):
+            self.native_http.return_value = response(raw, ordinary, limited=True)
+            polled = await self.client.sync(timeout=30000)
+            await self.adapter._absorb_sync(self.client, polled, initial=True)
+        assert self.admitted == ["$task-wake"]
+        assert self.matrix.snapshot["state"]["rooms"]["!room:test"]["gaps"] == ["history"]
+        assert len(self.matrix.snapshot["state"]["pending"]) == 2
+
+    async def test_task_room_supplement_does_not_wait_for_chat_history(self):
+        self.room_authority.return_value = {"taskId": "main"}
+        self.native_http.return_value = response(event("$task-supplement"), limited=True)
+        polled = await self.client.sync(timeout=30000)
+        await self.adapter._absorb_sync(self.client, polled, initial=True)
+        assert self.admitted == ["$task-supplement"]
+        self.room_authority.assert_called_once_with("tasks/room-context?roomId=%21room%3Atest")
+        assert self.matrix.snapshot["state"]["rooms"]["!room:test"]["gaps"] == ["history"]
+
+    async def test_ready_task_discovery_continues_without_an_at_notification(self):
+        self.adapter._pending_matrix_ready = True
+        self.adapter._pending_matrix = SimpleNamespace(drain=AsyncMock())
+        self.adapter._recover_tasks = AsyncMock()
+        with patch("hermes_matrix.public_tasks.retain_confirmed_handoffs"):
+            await self.absorb(response(next_batch="scan-one"))
+            await self.absorb(response(next_batch="scan-two"))
+        assert self.admitted == []
+        assert self.adapter._recover_tasks.await_count == 2
 
     async def test_private_control_uses_original_id_and_never_becomes_chat(self):
         raw = event("$wake")

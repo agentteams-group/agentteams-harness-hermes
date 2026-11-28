@@ -1,21 +1,17 @@
 """Publish native lifecycle callbacks as ID-correlated Matrix run blocks."""
 import asyncio
 from contextvars import ContextVar
-import json
 import threading
 import time
+
+from run_progress import progress_value as bounded
 
 current_progress = ContextVar('agentteams_matrix_progress', default=None)
 
 
-def bounded(value):
-    from runtime_observability import redact
-    text = redact(json.dumps(value, ensure_ascii=False, default=str))
-    return json.loads(text) if len(text) <= 4096 else {'preview': text[:4096], 'truncated': True}
-
-
 def task_run_id(team, task, generation):
-    return f"hermes:{team}/{task}:{generation}"
+    from runtime_control import task_run_id as common_run_id
+    return common_run_id(team, task, generation)
 
 
 class MatrixProgress:
@@ -42,8 +38,8 @@ class MatrixProgress:
         return text
 
     def tool_started(self, identity, name, arguments):
-        from runtime_observability import redact
-        text = redact(self.take_reasoning())[:4096]
+        from run_progress import progress_text
+        text = progress_text(self.take_reasoning())
         if text:
             self.submit(self.publish('reasoning:' + identity, {'type': 'thinking', 'content': text}))
         self.submit(self.tool(identity, name, arguments))
@@ -76,13 +72,11 @@ class MatrixProgress:
 
     async def finish(self, *, failed=False, phase_complete=False):
         failed = failed or self.failed
-        from runtime_observability import redact
-        text = redact(self.take_reasoning())[:4096]
+        from run_progress import progress_text
+        text = progress_text(self.take_reasoning())
         if text:
             self.submit(self.publish('reasoning:final', {'type': 'thinking', 'content': text}))
         for future in self.pending:
             await asyncio.wrap_future(future)
-        if phase_complete and not failed:
-            return
         await self.publish('ending', {'type': 'error', 'kind': 'failed' if failed else 'quiet',
                                      'title': '执行失败' if failed else '已处理'})

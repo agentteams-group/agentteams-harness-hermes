@@ -29,6 +29,7 @@ limits, mcp servers, skills paths) is preserved verbatim.
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import os
 import sys
@@ -242,6 +243,7 @@ def _matrix_env(cfg: Dict[str, Any]) -> Dict[str, str]:
         "MATRIX_DM_ALLOW_FROM": dm_allow,
         "MATRIX_GROUP_POLICY": matrix_raw.get("groupPolicy", "allowlist"),
         "MATRIX_GROUP_ALLOW_FROM": _csv(matrix_raw.get("groupAllowFrom")),
+        "MATRIX_HOME_CHANNEL": matrix_raw.get("homeRoomId") or "disabled",
         # Hermes's own bridge in gateway/config.py reads these; keep the names.
         "MATRIX_REQUIRE_MENTION": "true" if matrix_raw.get(
             "requireMention", True
@@ -435,6 +437,8 @@ def bridge_openclaw_to_hermes(
     """
     runtime_path = hermes_home.parent / "runtime/runtime.yaml"
     runtime = (yaml.safe_load(runtime_path.read_text()) or {}) if runtime_path.is_file() else {}
+    from runtime_control import approval_mode
+    mode = approval_mode(runtime)
     member = runtime.get("member", {})
     worker_model = runtime.get("desired", {}).get("model") if member.get("runtime") == "hermes" else None
     if worker_model is not None:
@@ -479,6 +483,10 @@ def bridge_openclaw_to_hermes(
         # Legacy pass-through env must not restore a superseded model/key.
         merged.update(_model_env(openclaw_cfg))
 
+    if mode:
+        # The native YOLO environment switch is frozen at SDK import time.
+        # Let the explicit native approvals.mode own the configured policy.
+        merged['HERMES_YOLO_MODE'] = '0'
     _write_env_file(env_path, merged)
 
     # ── config.yaml ─────────────────────────────────────────────────────
@@ -497,7 +505,19 @@ def bridge_openclaw_to_hermes(
     # change to e.g. free_response_rooms must propagate as a list replacement,
     # not append.
     model_block = _model_yaml_block(openclaw_cfg)
+    if mode:
+        existing_yaml.setdefault("approvals", {})["mode"] = "off" if mode == "allow" else "manual"
     if model_block:
+        # Named custom providers preserve an explicit transport for non-OpenAI
+        # gateways; the SDK's bare "custom" route infers its transport instead.
+        if os.getenv("HERMES_API_MODE") == "codex_responses":
+            existing_yaml.setdefault("providers", {})["agentteams-gateway"] = {
+                "api": model_block.get("base_url", ""),
+                "transport": "codex_responses",
+                "key_env": "OPENAI_API_KEY",
+                "default_model": model_block["default"],
+            }
+            model_block["provider"] = "custom:agentteams-gateway"
         # Preserve user-set fields like max_tokens or reasoning_effort.
         existing_yaml["model"] = {**existing_yaml.get("model", {}), **model_block}
 
@@ -575,6 +595,27 @@ def bridge_openclaw_to_hermes(
     else:
         terminal.setdefault("cwd", str(hermes_home))
 
+    if member.get("runtime") == "hermes":
+        from urllib.parse import urlsplit
+        managed_file = hermes_home / "agentteams-mcp.json"
+        previous = json.loads(managed_file.read_text()) if managed_file.is_file() else []
+        servers = existing_yaml.setdefault("mcp_servers", {})
+        for name in previous:
+            servers.pop(name, None)
+        names = []
+        for item in runtime.get("desired", {}).get("mcpServers") or []:
+            name, url = item["name"], item["url"]
+            address = urlsplit(url)
+            if name == "teamharness" or address.scheme not in {"http", "https"} or not address.netloc or address.username is not None:
+                raise ValueError("Invalid assigned HTTP MCP service")
+            headers = dict(item.get("headers") or {})
+            gateway = urlsplit(runtime.get("desired", {}).get("model", {}).get("gatewayUrl", ""))
+            if (address.scheme, address.netloc) == (gateway.scheme, gateway.netloc):
+                headers["Authorization"] = "Bearer " + os.getenv(runtime.get("credentials", {}).get("gatewayKeyEnv", "AGENTTEAMS_WORKER_GATEWAY_KEY"), "")
+            servers[name] = {"url": url, "headers": headers}
+            names.append(name)
+        managed_file.write_text(json.dumps(names))
+
     # Team Task tools consume the Controller's own role/scope contract. Keep
     # the legacy model/Matrix bridge, but do not infer scope from local Tasks.
     if runtime_path.is_file():
@@ -604,6 +645,7 @@ def bridge_openclaw_to_hermes(
             default_flow_style=False,
         )
     )
+    config_path.chmod(0o600)
 
     # ── SOUL.md / AGENTS.md ─────────────────────────────────────────────
     # Hermes-agent has no fixed system-prompt filename, but the standard
