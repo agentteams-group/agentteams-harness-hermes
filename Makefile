@@ -44,5 +44,8 @@ native-recovery-smoke:
 	docker run --rm --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_task_tools_smoke.py
 	docker run --rm --network none --entrypoint /opt/venv/hermes/bin/python -e PYTHONPATH=/opt/agentteams/scripts/lib/telemetry:/opt/agentteams/scripts/lib -e AGENTTEAMS_PLUGIN_DIR=/opt/agentteams/plugins/teamharness -v "$(CURDIR)/tests:/smoke:ro" $(IMAGE):$(VERSION) /smoke/native_public_tasks_smoke.py
 
+native-tool-outcomes-smoke:
+	docker run --rm --entrypoint /bin/sh -v "$(CURDIR):/candidate:ro" -e PYTHONPATH=/candidate/src:/opt/agentteams/scripts/lib/telemetry:/opt/agentteams/scripts/lib $(IMAGE):$(VERSION) -ec '/opt/venv/hermes/bin/python -m pip install pytest; /opt/venv/hermes/bin/python -c "import agent.tool_executor, tools.mcp_tool_handlers, opentelemetry.sdk.trace"; /opt/venv/hermes/bin/python -m pytest /candidate/tests/test_mcp_outcomes.py /candidate/tests/test_mcp_transport_outcomes.py /candidate/tests/test_native_telemetry.py -q'
+
 storage-config-smoke:
 	python3 tests/storage_config_smoke.py --image $(IMAGE):$(VERSION)

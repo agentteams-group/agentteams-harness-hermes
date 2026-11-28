@@ -26,7 +26,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
-      - run: python -m pip install pytest pyyaml httpx rich typer
+      - run: python -m pip install pytest pyyaml httpx rich typer opentelemetry-sdk
       - run: make test
         env:
           AT_SOURCE: ${{ github.workspace }}/.deps/AgentTeams
@@ -44,6 +44,7 @@ jobs:
       - run: make storage-config-smoke VERSION=ci
       - run: make direct-control-smoke VERSION=ci
       - run: make native-coordination-smoke VERSION=ci
+      - run: make native-tool-outcomes-smoke
       - run: make native-recovery-smoke VERSION=ci
       - name: Upgrade an existing v0.22.7 Worker
         run: python3 tests/upgrade_e2e.py --new-image ghcr.io/agentteams-group/agentteams-harness-hermes:ci

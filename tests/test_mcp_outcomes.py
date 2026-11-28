@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
-from agent import tool_executor
+tool_executor = pytest.importorskip("agent.tool_executor", reason="Requires the installed Hermes SDK; exercised by native-tool-outcomes-smoke")
 from tools import mcp_tool_handlers as native
 from tools.registry import registry
 from hermes_matrix.mcp_outcomes import install, unconfirmed

@@ -6,7 +6,8 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
-from tools import mcp_tool_handlers as native, mcp_tool_transport as transport
+native = pytest.importorskip("tools.mcp_tool_handlers", reason="Requires the installed Hermes SDK; exercised by native-tool-outcomes-smoke")
+from tools import mcp_tool_transport as transport
 from hermes_matrix.mcp_transport_outcomes import install
 
 
