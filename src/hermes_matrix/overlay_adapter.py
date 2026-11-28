@@ -122,6 +122,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
         self._vision_enabled = _truthy_env("MATRIX_VISION_ENABLED", default=False)
         self._session_receipts = Receipts(os.getenv("AGENTTEAMS_WORKER_HOME") or os.environ["HOME"]) if Receipts else None
         self._direct_runs: dict[str, dict] = {}
+        self._task_runs: dict[str, dict] = {}
         self._dashboard_approvals = MatrixApprovals(self._send_dashboard_approval)
         self._recovered_admissions = set()
         self._task_recovery_lock = asyncio.Lock()
@@ -157,6 +158,11 @@ class MatrixAdapter(_NativeMatrixAdapter):
             if source_event and entry["task"].get("room_id") != str(source_event.room_id):
                 continue
             claimed = await asyncio.to_thread(recovery.claim, snapshot, entry)
+            from runtime_control import retired_task_runs, retired_run_delivered
+            for ending in retired_task_runs(team, claimed['task'], recovery.process):
+                from mautrix.types import EventType
+                ending_event = await self._client.send_message_event(ending['room_id'], EventType.ROOM_MESSAGE, ending['content'], txn_id=ending['transaction'])
+                retired_run_delivered(recovery.process, ending['transaction'], ending_event)
             if claim_only:
                 continue
             task = claimed["task"]
@@ -328,6 +334,9 @@ class MatrixAdapter(_NativeMatrixAdapter):
                 room, event_id, decoded, intent, task_id=task_id)
 
     async def _on_room_message(self, event):
+        if (os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager" and self._session_receipts
+                and await asyncio.to_thread(self._session_receipts.was_completed, str(event.room_id), str(event.event_id))):
+            return
         token = _matrix_source_event.set(event)
         error = None
         try:
@@ -392,6 +401,16 @@ class MatrixAdapter(_NativeMatrixAdapter):
         await self.handle_message(message)
         return getattr(message, "_gateway_accepted", False)
 
+    async def _get_room_member_count(self, room_id: str) -> Optional[int]:
+        # The pinned adapter's fallback uses nio's joined_members method;
+        # the native transport here is mautrix, whose API returns a member map.
+        if self._client is not None:
+            try:
+                return len(await self._client.get_joined_members(room_id))
+            except Exception:
+                pass  # Retain the SDK's cached/unknown classification on a lookup failure.
+        return await super()._get_room_member_count(room_id)
+
     async def _direct_member(self, event) -> bool:
         if not event.source or not event.message_id or not self._client:
             return False
@@ -448,6 +467,9 @@ class MatrixAdapter(_NativeMatrixAdapter):
                         if phase and prepared.get("retryable"):
                             await phase.notify(public_event["id"], event.message_id, "retry")
                         raise RuntimeError("Public Task context is unavailable; no model turn was started")
+                if not public_event and not recovered:
+                    prepared = await asyncio.to_thread(common("task_native").invoke,
+                        {"operation": "room_context", "room": event.source.chat_id})
                 role = os.getenv("AGENTTEAMS_AGENT_ROLE", "worker")
                 if role in {"manager", "leader", "team_leader"} and (public_event or {}).get("kind") != "assistant_digest":
                     arguments = {"operation": "roster", "role": role}
@@ -506,13 +528,23 @@ class MatrixAdapter(_NativeMatrixAdapter):
         if "org.agentteams.coordination" in (event.raw_message or {}) or getattr(event, "_agentteams_recovery", None):
             kind = (getattr(event, "_task_protocol_meta", None) or {}).get("teamharness_coordination", {}).get("kind")
             token = _coordination_turn.set(kind or True)
+            recovery = getattr(event, "_agentteams_recovery", None)
+            if recovery:
+                self._task_runs[event.source.chat_id] = {"event": event, "session_key": session_key}
             try:
                 return await super()._process_message_background(event, session_key)
             finally:
-                _coordination_turn.reset(token)
-                if getattr(self, "_pending_matrix", None) is not None:
-                    from worker_matrix_state import matrix_event_key
-                    self._pending_matrix.running.discard(matrix_event_key(event.source.chat_id, event.message_id))
+                try:
+                    if recovery:
+                        from hermes_matrix.task_inputs import close
+                        close(event)
+                finally:
+                    if recovery:
+                        self._task_runs.pop(event.source.chat_id, None)
+                    _coordination_turn.reset(token)
+                    if getattr(self, "_pending_matrix", None) is not None:
+                        from worker_matrix_state import matrix_event_key
+                        self._pending_matrix.running.discard(matrix_event_key(event.source.chat_id, event.message_id))
         if not await self._direct_member(event):
             return await super()._process_message_background(event, session_key)
         room = event.source.chat_id
@@ -642,8 +674,9 @@ class MatrixAdapter(_NativeMatrixAdapter):
             return cursor
         pending = getattr(self, "_pending_matrix", None)
         startup = pending is not None and not self._pending_matrix_ready
-        if startup:
+        if pending is not None:
             await self._recover_tasks()
+        if startup:
             await pending.drain()
             from worker_handoff import recovery_scanned
             recovery_scanned()

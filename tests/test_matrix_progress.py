@@ -51,7 +51,7 @@ def test_parallel_same_name_calls_keep_exact_ids_results_and_one_run():
     asyncio.run(check())
 
 
-def test_successful_task_phase_ends_with_its_result_and_keeps_its_run_on_recovery():
+def test_successful_task_phase_closes_progress_and_keeps_its_run_on_recovery():
     async def check():
         sent = []
         async def send(room, content):
@@ -65,5 +65,7 @@ def test_successful_task_phase_ends_with_its_result_and_keeps_its_run_on_recover
             run_ids.append(display.run_id)
             await display.finish(phase_complete=True)
         assert run_ids[0] == run_ids[1]
-        assert sent == []
+        assert len(sent) == 2
+        assert all(row['org.agentteams.run']['blocks'][0]['kind'] == 'quiet' for row in sent)
+        assert all(row['org.agentteams.progress_only'] for row in sent)
     asyncio.run(check())

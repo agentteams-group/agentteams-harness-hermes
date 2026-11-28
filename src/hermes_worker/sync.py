@@ -423,7 +423,21 @@ class FileSync:
                 f"openclaw.json not found in MinIO for worker {self.worker_name}"
             )
         logger.info("Loaded Worker compatibility configuration (%d chars)", len(text))
-        return json.loads(text)
+        config = json.loads(text)
+        # Manager records retain the compatibility transport, but their public
+        # channel policy remains authoritative when another Human is added.
+        if runtime.get("member", {}).get("role") == "manager":
+            policy = runtime.get("desired", {}).get("channelPolicy") or {}
+            domain = runtime["member"].get("matrixUserId", "").partition(":")[2]
+            def ids(values):
+                return [value if value.startswith("@") else f"@{value}:{domain}" for value in values]
+            matrix = config.setdefault("channels", {}).setdefault("matrix", {})
+            for prefix, target, field in (("dm", matrix.setdefault("dm", {}), "allowFrom"),
+                                          ("group", matrix, "groupAllowFrom")):
+                denied = set(ids(policy.get(prefix + "DenyExtra") or []))
+                allowed = list(target.get(field) or []) + ids(policy.get(prefix + "AllowExtra") or [])
+                target[field] = list(dict.fromkeys(value for value in allowed if value not in denied))
+        return config
 
     def get_soul(self) -> Optional[str]:
         return self._cat(f"{self._prefix}/SOUL.md")

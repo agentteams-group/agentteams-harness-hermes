@@ -16,6 +16,15 @@ from tools.environments.local import LocalEnvironment
 from tools.interrupt import set_interrupt
 
 
+def test_completed_manager_input_is_not_dispatched_after_runtime_switch(tmp_path, monkeypatch):
+    from agentteams_receipts import Receipts
+    monkeypatch.setenv('AGENTTEAMS_AGENT_ROLE', 'manager')
+    adapter = MatrixAdapter.__new__(MatrixAdapter)
+    adapter._session_receipts = Receipts(tmp_path)
+    adapter._session_receipts.enqueue('!private:test', '$done', 'completed')
+    asyncio.run(adapter._on_room_message(SimpleNamespace(room_id='!private:test', event_id='$done')))
+
+
 def message(event_id, text, action=None, sender="@human:test", run_id="$start"):
     return SimpleNamespace(message_id=event_id, text=text,
         source=SimpleNamespace(chat_id="!dm:test", user_id=sender),
@@ -29,6 +38,20 @@ class NativeAgent(InterruptControlMixin):
         self._active_children = []
         self._active_children_lock = threading.Lock()
         self.quiet_mode = True
+
+
+def test_room_identity_reads_members_from_the_actual_mautrix_api(monkeypatch):
+    monkeypatch.setenv("MATRIX_ALLOWED_USERS", "@human:test")
+    async def check():
+        adapter = MatrixAdapter(PlatformConfig(enabled=True))
+        members = {"@agent:test": {}, "@human:test": {}}
+        adapter._client = SimpleNamespace(state_store=None, get_joined_members=AsyncMock(return_value=members))
+        adapter._get_room_state_value = AsyncMock(return_value=None)
+        assert await adapter._get_room_member_count("!dm:test") == 2
+        assert (await adapter._resolve_room_identity("!dm:test", force_refresh=True)).chat_type == "dm"
+        members["@third:test"] = {}
+        assert (await adapter._resolve_room_identity("!dm:test", force_refresh=True)).chat_type == "room"
+    asyncio.run(check())
 
 
 def test_execution_notice_uses_the_native_serializable_event_type(monkeypatch):
@@ -177,3 +200,36 @@ def test_controls_reject_other_owner_group_members_and_stale_run(monkeypatch):
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
     asyncio.run(check())
+
+
+@pytest.mark.parametrize("recovery", ["resume", "done", "verify"])
+def test_task_supplement_is_claimed_before_native_steer(monkeypatch, recovery):
+    from unittest.mock import Mock
+    from hermes_matrix import task_inputs
+    from task_recovery import RecoveryConflict
+    monkeypatch.setenv("TEAMHARNESS_RUNTIME_CONFIG", "/unused/runtime.yaml")
+    monkeypatch.setattr(task_inputs.Path, "read_text", lambda self: "{}")
+    monkeypatch.setattr(task_inputs, "task_supplement", lambda *args: True)
+    order = []
+    matrix = Mock()
+    matrix.message_claim.side_effect = lambda key: (order.append("claim") or {"recovery": recovery})
+    monkeypatch.setattr("worker_matrix_state.WorkerMatrix", lambda runtime: matrix)
+    agent = SimpleNamespace(steer=lambda *args, **kwargs: (order.append("steer") or True))
+    event = SimpleNamespace(_agentteams_recovery={"task_id": "child"},
+        _agentteams_task_turn=SimpleNamespace(supplements={}), source=SimpleNamespace(chat_id="!task:test"))
+    runner = SimpleNamespace(_running_agents={"session": agent})
+    class Handler:
+        def handle(self): pass
+    handler = Handler()
+    # The native adapter stores its bound message handler and active session.
+    adapter = SimpleNamespace(_task_runs={"!task:test": {"event": event, "session_key": "session"}},
+        _message_handler=handler.handle)
+    handler._running_agents = runner._running_agents
+    entry = {"room_id": "!task:test", "event_id": "$extra", "input": {
+        "sender": "@leader:test", "content": {"body": "new requirement"}}}
+    if recovery == "verify":
+        with pytest.raises(RecoveryConflict):
+            asyncio.run(task_inputs.steer(adapter, entry))
+    else:
+        assert asyncio.run(task_inputs.steer(adapter, entry)) is True
+    assert order == (["claim", "steer"] if recovery == "resume" else ["claim"])

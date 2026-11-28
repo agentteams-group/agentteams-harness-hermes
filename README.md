@@ -72,6 +72,12 @@ and `AGENTTEAMS_RUNTIME`; see `scripts/hermes-worker-entrypoint.sh` for the
 environment contract. Configurations, sessions, user plugins and Matrix crypto
 state remain in the existing per-worker workspace across an image upgrade.
 
+For an OpenAI-compatible gateway connection that requires the Responses API,
+set the member environment variable `HERMES_API_MODE=codex_responses`.
+The bridge selects a native named provider with that transport and references
+the projected `OPENAI_API_KEY`; it does not copy the credential into YAML.
+Without this setting, the existing Chat Completions routing stays unchanged.
+
 ## Upgrading an existing Worker
 
 Wait for active turns to finish and the final workspace sync to complete before

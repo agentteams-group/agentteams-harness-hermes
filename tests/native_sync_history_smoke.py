@@ -120,7 +120,7 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_managed_ready_waits_for_successful_full_recovery_scan(self):
         self.adapter._pending_matrix_ready = False
         self.adapter._pending_matrix = SimpleNamespace(drain=AsyncMock())
-        self.adapter._recover_tasks = AsyncMock(side_effect=[RuntimeError("storage offline"), None])
+        self.adapter._recover_tasks = AsyncMock(side_effect=[RuntimeError("storage offline"), None, None])
         self.page([], end=None)
         self.native_http.return_value = {"next_batch": "base"}
         first = await self.client.sync(timeout=10000, full_state=True)
@@ -139,6 +139,7 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
             scanned.assert_called_once()
             report.assert_awaited_once()
             await fixture.NativeSyncTests.absorb(self, {"next_batch": "later"})
+            assert self.adapter._recover_tasks.await_count == 3
             scanned.assert_called_once()
             report.assert_awaited_once()
 

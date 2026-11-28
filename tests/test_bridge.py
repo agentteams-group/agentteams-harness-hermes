@@ -3,12 +3,40 @@
 from __future__ import annotations
 
 import tempfile
+from unittest.mock import patch
 from pathlib import Path
 
 import yaml
+import pytest
 
 import hermes_worker.bridge as bridge_module
 from hermes_worker.bridge import bridge_openclaw_to_hermes
+
+
+@pytest.fixture(autouse=True)
+def isolated_runtime_projection(monkeypatch):
+    with patch.dict(bridge_module.os.environ):
+        monkeypatch.delenv("TEAMHARNESS_RUNTIME_CONFIG", raising=False)
+        yield
+
+
+def test_agent_approval_mode_maps_to_native_settings(tmp_path, monkeypatch):
+    home = tmp_path / '.hermes'
+    runtime = tmp_path / 'runtime/runtime.yaml'
+    runtime.parent.mkdir()
+    for mode, native in [('allow', 'off'), ('ask', 'manual')]:
+        runtime.write_text(yaml.safe_dump({'member': {'runtime': 'hermes'}, 'desired': {'approvalMode': mode}}))
+        bridge_openclaw_to_hermes(_make_openclaw_cfg(vision=False), home)
+        config = yaml.safe_load((home / 'config.yaml').read_text())
+        assert config['approvals']['mode'] == native
+        assert 'HERMES_YOLO_MODE="0"' in (home / '.env').read_text()
+
+
+def test_native_home_channel_is_projected_without_a_no_home_onboarding_tip():
+    config = _make_openclaw_cfg(vision=False)
+    assert bridge_module._matrix_env(config)["MATRIX_HOME_CHANNEL"] == "disabled"
+    config["channels"]["matrix"]["homeRoomId"] = "!personal:test"
+    assert bridge_module._matrix_env(config)["MATRIX_HOME_CHANNEL"] == "!personal:test"
 
 
 def _make_openclaw_cfg(*, vision: bool) -> dict:
@@ -159,6 +187,20 @@ def test_bridge_writes_auxiliary_vision_config(monkeypatch) -> None:
     assert vision["api_key"] == "key123"
     assert vision["timeout"] == 42
     assert vision["download_timeout"] == 7
+
+
+def test_bridge_explicit_responses_transport_uses_named_provider(monkeypatch):
+    monkeypatch.setattr(bridge_module, "_is_in_container", lambda: False)
+    monkeypatch.setenv("HERMES_API_MODE", "codex_responses")
+    config = _bridge_and_read(_make_openclaw_cfg(vision=False), initial_config={
+        "providers": {"personal": {"api": "https://personal.example/v1"}},
+    })
+    assert config["model"]["provider"] == "custom:agentteams-gateway"
+    assert config["providers"]["agentteams-gateway"] == {
+        "api": "http://aigw:18080/v1", "transport": "codex_responses",
+        "key_env": "OPENAI_API_KEY", "default_model": "qwen3.5-plus",
+    }
+    assert config["providers"]["personal"]["api"] == "https://personal.example/v1"
 
 
 def test_bridge_skips_auxiliary_vision_for_text_only_model(monkeypatch) -> None:

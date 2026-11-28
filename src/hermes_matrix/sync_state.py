@@ -4,6 +4,7 @@ from contextvars import ContextVar
 
 from mautrix.client.syncer import SyncStream
 from mautrix.types import EventType
+from task_coordination import requires_room_history
 from task_recovery import RecoveryConflict
 from worker_matrix_state import WorkerMatrix, matrix_event_key
 
@@ -150,7 +151,8 @@ class NativeSync:
             saved = await asyncio.to_thread(self.matrix.sync, snapshot, self.consumer, data.get("next_batch"), timelines)
             committed = True
             for event_id, room, admission, dispatched in held:
-                if saved["state"]["rooms"].get(room, {}).get("gaps") and admission.item:
+                if (saved["state"]["rooms"].get(room, {}).get("gaps") and admission.item
+                        and await asyncio.to_thread(requires_room_history, admission.item, str(self.adapter._user_id))):
                     # The immutable input remains pending for recovery after pagination.
                     dispatched.cancel()
                     await asyncio.gather(dispatched, return_exceptions=True)

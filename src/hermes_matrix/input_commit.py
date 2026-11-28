@@ -66,6 +66,11 @@ def install_native_input_guard():
         turn = ordinary_turn.get()
         if turn:
             turn.matrix.message_current(turn.identity)
+        from hermes_matrix.public_tasks import current_turn
+        public = current_turn.get()
+        if public and public.supplements:
+            from hermes_matrix.task_inputs import commit
+            commit(public, agent, kwargs["messages"], kwargs["conversation_history"])
         commit_input(agent, kwargs["messages"], kwargs["conversation_history"])
         if turn:
             turn.remember_input(agent)
